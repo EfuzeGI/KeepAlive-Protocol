@@ -11,7 +11,7 @@ import "@near-wallet-selector/modal-ui/styles.css";
 
 const { functionCall } = actionCreators;
 
-// Multiple RPC endpoints for fallback - fastnear first for speed
+// Multiple RPC endpoints for fallback
 const RPC_ENDPOINTS = [
     "https://testnet.rpc.fastnear.com",
     "https://near-testnet.drpc.org",
@@ -25,24 +25,22 @@ const POLLING_INTERVAL = 30000;
 const STORAGE_KEY_INITIALIZED = "sentinel_vault_initialized";
 const STORAGE_KEY_CACHED_STATUS = "sentinel_vault_status";
 
-// Types
+// Types - Updated for multi-vault contract
 interface VaultStatus {
     owner_id: string;
     beneficiary_id: string;
-    last_active: string;
+    vault_balance: string;
     heartbeat_interval_ms: string;
     grace_period_ms: string;
-    vault_balance: string;
-    is_emergency: boolean;
-    is_initialized: boolean;
     time_remaining_ms: string;
-    is_expired: boolean;
-    // Warning Protocol fields
     warning_triggered_at: string;
     warning_grace_remaining_ms: string;
+    is_initialized: boolean;
+    is_expired: boolean;
     is_warning_active: boolean;
     is_execution_ready: boolean;
     is_yielding: boolean;
+    is_emergency: boolean;
 }
 
 interface NearContextType {
@@ -62,10 +60,10 @@ interface NearContextType {
     checkPulse: () => Promise<{ status: string; time_remaining_ms: string; is_emergency: boolean } | null>;
     deposit: (amount: string) => Promise<void>;
     withdraw: (amount?: string) => Promise<void>;
-    initVault: (beneficiary: string, interval: number) => Promise<void>;
+    setupVault: (beneficiary: string, intervalMs: number, gracePeriodMs?: number) => Promise<void>;
     updateBeneficiary: (newBeneficiary: string) => Promise<void>;
-    updateInterval: (newInterval: number) => Promise<void>;
-    updateGracePeriod: (newGracePeriod: number) => Promise<void>;
+    updateInterval: (newIntervalMs: number) => Promise<void>;
+    updateGracePeriod: (newGracePeriodMs: number) => Promise<void>;
     resetVault: () => Promise<void>;
     refreshStatus: () => Promise<void>;
 }
@@ -100,17 +98,17 @@ const safeLocalStorage = {
     }
 };
 
-// Call view method with RPC fallback - tries each endpoint until one works
+// Call view method with RPC fallback - NOW accepts args
 async function callViewMethodWithFallback(methodName: string, args: object = {}): Promise<unknown> {
     const argsBase64 = btoa(JSON.stringify(args));
     let lastError: Error | null = null;
 
     for (const rpcUrl of RPC_ENDPOINTS) {
-        console.log("Trying RPC:", rpcUrl);
+        console.log("Trying RPC:", rpcUrl, "method:", methodName, "args:", args);
 
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             const response = await fetch(rpcUrl, {
                 method: "POST",
@@ -142,10 +140,9 @@ async function callViewMethodWithFallback(methodName: string, args: object = {})
             console.log("RPC Response from", rpcUrl, ":", data);
 
             if (data.error) {
-                // Check if it's a "contract not found" error - this means vault doesn't exist
                 const errorMessage = data.error.message || JSON.stringify(data.error);
                 if (errorMessage.includes("doesn't exist") || errorMessage.includes("MethodNotFound")) {
-                    console.log("Contract/method not found - vault not initialized");
+                    console.log("Contract/method not found");
                     return null;
                 }
                 throw new Error(errorMessage);
@@ -162,11 +159,9 @@ async function callViewMethodWithFallback(methodName: string, args: object = {})
         } catch (error) {
             console.error(`RPC ${rpcUrl} failed:`, error);
             lastError = error instanceof Error ? error : new Error(String(error));
-            // Continue to next RPC endpoint
         }
     }
 
-    // All endpoints failed
     throw lastError || new Error("All RPC endpoints failed");
 }
 
@@ -184,7 +179,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
     const hasLoadedCacheRef = useRef(false);
     const previousStatusRef = useRef<VaultStatus | null>(null);
 
-    // Load cached status on mount (before RPC call completes)
+    // Load cached status on mount
     useEffect(() => {
         if (hasLoadedCacheRef.current) return;
         hasLoadedCacheRef.current = true;
@@ -197,9 +192,9 @@ export function NearProvider({ children }: { children: ReactNode }) {
                 const parsed = JSON.parse(cachedStatus) as VaultStatus;
                 setVaultStatus(parsed);
                 previousStatusRef.current = parsed;
-                console.log("Loaded cached vault status - showing dashboard immediately");
+                console.log("Loaded cached vault status");
             } catch {
-                // Invalid cache, ignore
+                // Invalid cache
             }
         }
     }, []);
@@ -230,7 +225,6 @@ export function NearProvider({ children }: { children: ReactNode }) {
                 setSelector(_selector);
                 setModal(_modal);
 
-                // Subscribe to account changes
                 _selector.store.observable.subscribe((state) => {
                     const accounts = state.accounts;
                     setAccountId(accounts.length > 0 ? accounts[0].accountId : null);
@@ -246,71 +240,56 @@ export function NearProvider({ children }: { children: ReactNode }) {
         init();
     }, []);
 
-    // Refresh vault status with fallback RPC
+    // Refresh vault status - NOW uses get_vault({ account_id })
     const refreshStatus = useCallback(async (silent: boolean = false) => {
+        if (!accountId) {
+            setVaultStatus(null);
+            return;
+        }
+
         if (!silent) {
             setIsSyncing(true);
         }
         setConnectionError(null);
 
         try {
-            const status = await callViewMethodWithFallback("get_status") as VaultStatus | null;
+            // Call get_vault with the connected account_id
+            const status = await callViewMethodWithFallback("get_vault", { account_id: accountId }) as VaultStatus | null;
 
             if (status) {
+                // Vault exists for this user
                 setVaultStatus(status);
                 previousStatusRef.current = status;
 
-                // Cache to localStorage for instant load next time
-                if (status.is_initialized) {
-                    safeLocalStorage.setItem(STORAGE_KEY_INITIALIZED, "true");
-                    safeLocalStorage.setItem(STORAGE_KEY_CACHED_STATUS, JSON.stringify(status));
-                }
+                safeLocalStorage.setItem(STORAGE_KEY_INITIALIZED, "true");
+                safeLocalStorage.setItem(STORAGE_KEY_CACHED_STATUS, JSON.stringify(status));
             } else {
-                // Contract returned null - vault truly not initialized
-                // But ONLY reset if we don't have previous state
-                if (!previousStatusRef.current?.is_initialized) {
-                    setVaultStatus({
-                        owner_id: "",
-                        beneficiary_id: "",
-                        last_active: "0",
-                        heartbeat_interval_ms: "0",
-                        grace_period_ms: "0",
-                        vault_balance: "0",
-                        is_emergency: false,
-                        is_initialized: false,
-                        time_remaining_ms: "0",
-                        is_expired: false,
-                        warning_triggered_at: "0",
-                        warning_grace_remaining_ms: "0",
-                        is_warning_active: false,
-                        is_execution_ready: false,
-                        is_yielding: false,
-                    });
-                }
+                // No vault for this user - show create vault screen
+                setVaultStatus(null);
+                previousStatusRef.current = null;
+                safeLocalStorage.removeItem(STORAGE_KEY_INITIALIZED);
+                safeLocalStorage.removeItem(STORAGE_KEY_CACHED_STATUS);
             }
         } catch (error) {
             console.error("Failed to fetch vault status:", error);
             setConnectionError("Connection issues, retrying...");
 
-            // IMPORTANT: Keep previous state, don't reset to uninitialized
-            // The vault is still there, we just can't reach it temporarily
+            // Keep previous state on network error
             if (previousStatusRef.current) {
-                console.log("Network error - keeping previous dashboard state");
+                console.log("Network error - keeping previous state");
             }
         } finally {
             setIsSyncing(false);
         }
-    }, []);
+    }, [accountId]);
 
     // Start polling when connected
     useEffect(() => {
         if (accountId) {
-            // Initial fetch
             refreshStatus();
 
-            // Start polling
             pollingRef.current = setInterval(() => {
-                refreshStatus(true); // silent refresh
+                refreshStatus(true);
             }, POLLING_INTERVAL);
 
             return () => {
@@ -320,15 +299,15 @@ export function NearProvider({ children }: { children: ReactNode }) {
                 }
             };
         } else {
-            // Clear polling when disconnected
             if (pollingRef.current) {
                 clearInterval(pollingRef.current);
                 pollingRef.current = null;
             }
+            setVaultStatus(null);
         }
     }, [accountId, refreshStatus]);
 
-    // Call method helper with transaction pending state
+    // Call method helper
     const callMethod = useCallback(async (
         methodName: string,
         args: object = {},
@@ -369,20 +348,21 @@ export function NearProvider({ children }: { children: ReactNode }) {
         setVaultStatus(null);
         previousStatusRef.current = null;
 
-        // Clear cache on disconnect
         safeLocalStorage.removeItem(STORAGE_KEY_INITIALIZED);
         safeLocalStorage.removeItem(STORAGE_KEY_CACHED_STATUS);
     }, [selector]);
 
-    // Contract methods
+    // Contract methods - Owner actions (use predecessorAccountId in contract)
     const ping = useCallback(async () => {
         await callMethod("ping", {});
         await refreshStatus();
     }, [callMethod, refreshStatus]);
 
     const checkPulse = useCallback(async () => {
+        if (!accountId) return null;
         try {
-            await callMethod("check_pulse", {}, BigInt("100000000000000"));
+            // For frontend user checking their own pulse
+            await callMethod("check_pulse", { account_id: accountId }, BigInt("100000000000000"));
             await refreshStatus();
             return vaultStatus ? {
                 status: vaultStatus.is_expired ? "TRIGGERED" : "SAFE",
@@ -393,7 +373,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
             console.error("check_pulse failed:", error);
             return null;
         }
-    }, [callMethod, refreshStatus, vaultStatus]);
+    }, [accountId, callMethod, refreshStatus, vaultStatus]);
 
     const deposit = useCallback(async (amount: string) => {
         const nearAmount = parseFloat(amount);
@@ -410,15 +390,23 @@ export function NearProvider({ children }: { children: ReactNode }) {
         await refreshStatus();
     }, [callMethod, refreshStatus]);
 
-    const initVault = useCallback(async (beneficiary: string, interval: number) => {
+    // Setup vault - NEW method name matching contract
+    const setupVault = useCallback(async (beneficiary: string, intervalMs: number, gracePeriodMs?: number) => {
+        const args: { beneficiary: string; interval_ms: number; grace_period_ms?: number } = {
+            beneficiary,
+            interval_ms: intervalMs,
+        };
+        if (gracePeriodMs) {
+            args.grace_period_ms = gracePeriodMs;
+        }
+
         await callMethod(
             "setup_vault",
-            { beneficiary, interval },
+            args,
             BigInt("100000000000000"),
             BigInt(0)
         );
 
-        // Mark as initialized in localStorage immediately
         safeLocalStorage.setItem(STORAGE_KEY_INITIALIZED, "true");
         await refreshStatus();
     }, [callMethod, refreshStatus]);
@@ -428,19 +416,18 @@ export function NearProvider({ children }: { children: ReactNode }) {
         await refreshStatus();
     }, [callMethod, refreshStatus]);
 
-    const updateInterval = useCallback(async (newInterval: number) => {
-        await callMethod("update_interval", { new_interval: newInterval });
+    const updateInterval = useCallback(async (newIntervalMs: number) => {
+        await callMethod("update_interval", { new_interval_ms: newIntervalMs });
         await refreshStatus();
     }, [callMethod, refreshStatus]);
 
-    const updateGracePeriod = useCallback(async (newGracePeriod: number) => {
-        await callMethod("update_grace_period", { new_grace_period: newGracePeriod });
+    const updateGracePeriod = useCallback(async (newGracePeriodMs: number) => {
+        await callMethod("update_grace_period", { new_grace_period_ms: newGracePeriodMs });
         await refreshStatus();
     }, [callMethod, refreshStatus]);
 
     const resetVault = useCallback(async () => {
         await callMethod("reset_vault", {}, BigInt("100000000000000"));
-        // Clear localStorage cache
         safeLocalStorage.removeItem(STORAGE_KEY_INITIALIZED);
         safeLocalStorage.removeItem(STORAGE_KEY_CACHED_STATUS);
         previousStatusRef.current = null;
@@ -464,7 +451,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
         checkPulse,
         deposit,
         withdraw,
-        initVault,
+        setupVault,
         updateBeneficiary,
         updateInterval,
         updateGracePeriod,

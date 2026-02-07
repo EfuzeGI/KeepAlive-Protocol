@@ -4,11 +4,18 @@ import { Header } from "@/components/Header";
 import { HeroSection } from "@/components/HeroSection";
 import { VaultStatus } from "@/components/VaultStatus";
 import { VaultActions } from "@/components/VaultActions";
+import { CreateVault } from "@/components/CreateVault";
 import { useNear } from "@/contexts/NearContext";
-import { Shield, Github, Twitter, FileText } from "lucide-react";
+import { Shield, Github, Twitter, FileText, Loader2 } from "lucide-react";
 
 export default function Home() {
-  const { isConnected } = useNear();
+  const { isConnected, vaultStatus, isSyncing, isLoading } = useNear();
+
+  // Determine what to show based on vault status
+  const hasVault = vaultStatus !== null && vaultStatus.is_initialized;
+  const showCreateVault = isConnected && !hasVault && !isLoading && !isSyncing;
+  const showDashboard = isConnected && hasVault;
+  const showLoading = isConnected && (isLoading || (isSyncing && !vaultStatus));
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -34,7 +41,19 @@ export default function Home() {
       <main className="relative flex-1">
         {!isConnected ? (
           <HeroSection />
-        ) : (
+        ) : showLoading ? (
+          // Loading state
+          <div className="min-h-[60vh] flex items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
+              <p className="text-slate-400">Loading your vault...</p>
+            </div>
+          </div>
+        ) : showCreateVault ? (
+          // No vault - show create vault form
+          <CreateVault />
+        ) : showDashboard ? (
+          // Has vault - show dashboard
           <div id="dashboard" className="container mx-auto px-4 py-12">
             <div className="mb-8">
               <h1 className="text-3xl font-bold text-white mb-2">
@@ -96,7 +115,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </main>
 
       {/* Footer */}

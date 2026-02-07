@@ -18,7 +18,7 @@ const __dirname = path.dirname(__filename);
 //   ╚════██║██╔══╝  ██║╚██╗██║   ██║   ██║██║╚██╗██║██╔══╝  ██║     
 //   ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗
 //   ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
-//   Warning Protocol Agent | 2-Level Protection
+//   Multi-Vault Warning Protocol Agent
 // ═══════════════════════════════════════════════════════════════════
 
 const RPC_ENDPOINTS = [
@@ -87,7 +87,7 @@ class Rpc {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Contract Methods
+//  Contract Methods - NOW WITH account_id PARAMETER
 // ═══════════════════════════════════════════════════════════════════
 
 async function viewMethod(rpc, method, args = {}) {
@@ -139,12 +139,11 @@ async function sendWarningShot(rpc, ownerId) {
     log(`Amount: 0.00001 NEAR`, C.dim);
 
     try {
-        // Send dust transaction with memo
         const tx = await rpc.acc.sendMoney(ownerId, cfg.warningAmount);
 
         log(`${C.bold}📨 WARNING SHOT FIRED${C.reset}`, C.yellow);
         log(`TX: ${tx.transaction.hash}`, C.dim);
-        log(`Owner has 24h to ping before execution.`, C.yellow);
+        log(`Owner has grace period to ping before execution.`, C.yellow);
         console.log();
 
         return true;
@@ -179,6 +178,22 @@ function saveSubscribers(subscribers) {
     } catch (e) {
         log(`Error saving subscribers: ${e.message}`, C.red);
     }
+}
+
+// Get all unique wallets being watched
+function getAllWatchedWallets() {
+    const subscribers = loadSubscribers();
+    const wallets = new Set();
+
+    for (const walletList of Object.values(subscribers)) {
+        if (Array.isArray(walletList)) {
+            for (const wallet of walletList) {
+                wallets.add(wallet);
+            }
+        }
+    }
+
+    return Array.from(wallets);
 }
 
 // Initialize Telegram bot
@@ -412,7 +427,6 @@ async function performDigitalLifeCheck(ownerId) {
         await sleep(check.delay);
 
         // TODO: Implement real API checks when social accounts are connected
-        // For now, always return no activity since accounts are not integrated
         const hasActivity = false;
 
         if (hasActivity) {
@@ -459,7 +473,114 @@ function formatTime(ms) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Main Loop
+//  Process Single Vault
+// ═══════════════════════════════════════════════════════════════════
+
+async function processVault(rpc, accountId) {
+    try {
+        // Get vault status for this specific account
+        const status = await viewMethod(rpc, 'get_vault', { account_id: accountId });
+
+        if (!status) {
+            // No vault for this account - skip silently
+            return;
+        }
+
+        const prefix = `[${accountId}]`;
+
+        if (status.is_emergency) {
+            log(`${prefix} ${C.bold}EMERGENCY${C.reset} - Transfer complete`, C.red);
+        }
+        else if (status.is_yielding) {
+            // LEVEL 2: Contract in YIELD - perform verification
+            log(`${prefix} ${C.bold}YIELD STATE${C.reset} - Starting verification...`, C.magenta);
+
+            const confirmDeath = await performDigitalLifeCheck(status.owner_id);
+
+            log(`${prefix} Calling resume_pulse(${confirmDeath})...`, C.cyan);
+
+            try {
+                await callMethod(rpc, 'resume_pulse', {
+                    account_id: accountId,
+                    confirm_death: confirmDeath
+                });
+
+                if (confirmDeath) {
+                    log(`${prefix} ${C.bold}🔴 TRANSFER EXECUTED${C.reset}`, C.red);
+
+                    await sendTelegramAlert(accountId,
+                        `🔴 *SENTINEL ALERT*\n\n` +
+                        `💀 *TRANSFER EXECUTED*\n\n` +
+                        `Vault: \`${accountId}\`\n` +
+                        `Funds transferred to beneficiary.\n\n` +
+                        `The owner did not respond to warnings.`
+                    );
+                } else {
+                    log(`${prefix} ${C.bold}🟢 YIELD CANCELLED${C.reset} - Owner alive`, C.green);
+                }
+            } catch (e) {
+                log(`${prefix} resume_pulse failed: ${e.message}`, C.red);
+            }
+        }
+        else if (status.is_execution_ready) {
+            // Grace period passed - initiate YIELD
+            log(`${prefix} ${C.bold}GRACE PERIOD EXPIRED${C.reset} - Initiating yield...`, C.orange);
+
+            try {
+                await callMethod(rpc, 'check_pulse', { account_id: accountId });
+                log(`${prefix} Yield initiated`, C.cyan);
+            } catch (e) {
+                log(`${prefix} check_pulse failed: ${e.message}`, C.red);
+            }
+        }
+        else if (status.is_warning_active) {
+            // LEVEL 1.5: Warning sent, waiting grace period
+            const remaining = formatTime(status.warning_grace_remaining_ms);
+            log(`${prefix} ${C.bold}⏳ WARNING ACTIVE${C.reset} | ${remaining} until execution eligible`, C.yellow);
+        }
+        else if (status.is_expired) {
+            // LEVEL 1: Expired but no warning - send warning
+            log(`${prefix} ${C.bold}⚠️  HEARTBEAT EXPIRED${C.reset} - Triggering warning...`, C.orange);
+
+            try {
+                await callMethod(rpc, 'trigger_warning', { account_id: accountId });
+                log(`${prefix} Warning triggered on-chain`, C.yellow);
+
+                // Send dust transaction to owner
+                await sendWarningShot(rpc, status.owner_id);
+
+                // Send Telegram notification with dynamic grace period
+                const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
+                const alertMessage = `🚨 *SENTINEL ALERT* 🚨
+
+⚠️ *Protocol 'Warning Shot' INITIATED*
+
+Your Vault Timer has *EXPIRED*.
+Vault: \`${accountId}\`
+Funds will be transferred to the beneficiary in *${gracePeriodFormatted}* unless you act.
+
+👉 [PING NOW TO ABORT](https://sentinel-agent.netlify.app/)`;
+
+                await sendTelegramAlert(accountId, alertMessage);
+
+                log(`${prefix} ${C.bold}🟡 WARNING SHOT FIRED${C.reset} - ${gracePeriodFormatted} grace period started`, C.yellow);
+            } catch (e) {
+                log(`${prefix} Warning trigger failed: ${e.message}`, C.red);
+            }
+        }
+        else {
+            // Normal operation
+            const remaining = formatTime(status.time_remaining_ms);
+            const balance = (BigInt(status.vault_balance) / 10n ** 24n).toString();
+            log(`${prefix} ${C.green}✓${C.reset} ${remaining} remaining | ${balance} NEAR`);
+        }
+    } catch (e) {
+        log(`[${accountId}] Error: ${e.message}`, C.red);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Main Loop - NOW ITERATES THROUGH ALL WATCHED WALLETS
 // ═══════════════════════════════════════════════════════════════════
 
 async function main() {
@@ -472,7 +593,7 @@ async function main() {
     console.log('  ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗');
     console.log('  ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝');
     console.log(`${C.reset}`);
-    console.log(`${C.dim}  Warning Protocol Agent | 2-Level Protection${C.reset}`);
+    console.log(`${C.dim}  Multi-Vault Warning Protocol Agent${C.reset}`);
     console.log();
 
     log(`Contract: ${cfg.contractId}`, C.dim);
@@ -486,98 +607,28 @@ async function main() {
     // Initialize Telegram bot for deep linking
     initTelegramBot();
 
-    log('Monitoring started...', C.green);
+    log('Multi-vault monitoring started...', C.green);
     console.log();
 
     while (true) {
         try {
-            const status = await viewMethod(rpc, 'get_status');
+            // Get all watched wallets from subscribers
+            const watchedWallets = getAllWatchedWallets();
 
-            if (!status.is_initialized) {
-                log('Vault not initialized', C.yellow);
-            }
-            else if (status.is_emergency) {
-                log(`${C.bold}EMERGENCY${C.reset} - Transfer complete`, C.red);
-            }
-            else if (status.is_yielding) {
-                // LEVEL 2: Contract in YIELD - perform verification
-                log(`${C.bold}YIELD STATE${C.reset} - Starting verification...`, C.magenta);
+            if (watchedWallets.length === 0) {
+                log(`No wallets being watched. Waiting for subscribers...`, C.dim);
+            } else {
+                console.log();
+                log(`═══════════════════════════════════════════════`, C.dim);
+                log(`Checking ${watchedWallets.length} vault(s)...`, C.cyan);
+                log(`═══════════════════════════════════════════════`, C.dim);
 
-                const confirmDeath = await performDigitalLifeCheck(status.owner_id);
-
-                log(`Calling resume_pulse(${confirmDeath})...`, C.cyan);
-
-                try {
-                    await callMethod(rpc, 'resume_pulse', { confirm_death: confirmDeath });
-
-                    if (confirmDeath) {
-                        log(`${C.bold}🔴 TRANSFER EXECUTED${C.reset}`, C.red);
-                    } else {
-                        log(`${C.bold}🟢 YIELD CANCELLED${C.reset} - Owner alive`, C.green);
-                    }
-                } catch (e) {
-                    log(`resume_pulse failed: ${e.message}`, C.red);
-                    // Check if transfer happened anyway (race condition)
-                    try {
-                        const currentStatus = await viewMethod(rpc, 'get_status');
-                        if (currentStatus.is_emergency) {
-                            log(`Note: Contract is in EMERGENCY state - transfer may have already completed`, C.yellow);
-                        }
-                    } catch (e2) {
-                        // Ignore status check error
-                    }
+                // Process each watched wallet
+                for (const walletId of watchedWallets) {
+                    await processVault(rpc, walletId);
+                    // Small delay between vaults to avoid rate limiting
+                    await sleep(500);
                 }
-            }
-            else if (status.is_execution_ready) {
-                // Grace period passed - initiate YIELD
-                log(`${C.bold}GRACE PERIOD EXPIRED${C.reset} - Initiating yield...`, C.orange);
-
-                try {
-                    await callMethod(rpc, 'check_pulse');
-                    log('Yield initiated', C.cyan);
-                } catch (e) {
-                    log(`check_pulse failed: ${e.message}`, C.red);
-                }
-            }
-            else if (status.is_warning_active) {
-                // LEVEL 1.5: Warning sent, waiting grace period
-                const remaining = formatTime(status.warning_grace_remaining_ms);
-                log(`${C.bold}⏳ WARNING ACTIVE${C.reset} | ${remaining} until execution eligible`, C.yellow);
-            }
-            else if (status.is_expired) {
-                // LEVEL 1: Expired but no warning - send warning
-                log(`${C.bold}⚠️  HEARTBEAT EXPIRED${C.reset} - Triggering warning...`, C.orange);
-
-                try {
-                    const result = await callMethod(rpc, 'trigger_warning');
-                    log(`Warning triggered on-chain`, C.yellow);
-
-                    // Send dust transaction to owner
-                    await sendWarningShot(rpc, status.owner_id);
-
-                    // Send Telegram notification with dynamic grace period
-                    const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
-                    const alertMessage = `🚨 *SENTINEL ALERT* 🚨
-
-⚠️ *Protocol 'Warning Shot' INITIATED*
-
-Your Vault Timer has *EXPIRED*.
-Funds will be transferred to the beneficiary in *${gracePeriodFormatted}* unless you act.
-
-👉 [PING NOW TO ABORT](https://sentinel-agent.netlify.app/)`;
-
-                    await sendTelegramAlert(status.owner_id, alertMessage);
-
-                    log(`${C.bold}🟡 WARNING SHOT FIRED${C.reset} - ${gracePeriodFormatted} grace period started`, C.yellow);
-                } catch (e) {
-                    log(`Warning trigger failed: ${e.message}`, C.red);
-                }
-            }
-            else {
-                // Normal operation
-                const remaining = formatTime(status.time_remaining_ms);
-                const balance = (BigInt(status.vault_balance) / 10n ** 24n).toString();
-                log(`${C.green}✓${C.reset} ${remaining} remaining | ${balance} NEAR`);
             }
         } catch (e) {
             log(`Error: ${e.message}`, C.red);
