@@ -244,32 +244,32 @@ export function VaultActions() {
     }
 
     return (
-        <Card className="bg-gradient-to-br from-slate-900/50 to-slate-900/30 border-slate-800/50 backdrop-blur-xl">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-3">
+        <div className="glass-card rounded-2xl overflow-hidden">
+            <div className="px-6 py-5 border-b border-white/5">
+                <div className="flex items-center gap-3">
                     <div className="relative">
-                        <div className="absolute inset-0 bg-emerald-500/20 blur-lg rounded-full" />
-                        <Settings className="relative h-6 w-6 text-emerald-400" />
+                        <div className="absolute inset-0 bg-cyan-500/20 blur-lg rounded-full" />
+                        <Settings className="relative h-5 w-5 text-cyan-400" />
                     </div>
-                    <span className="text-white">Vault Actions</span>
-                </CardTitle>
-                <CardDescription className="text-slate-400">
-                    Manage your Sentinel Vault and funds.
-                </CardDescription>
-            </CardHeader>
-            <CardContent>
+                    <div>
+                        <h3 className="text-white font-medium">Control Interface</h3>
+                        <p className="text-xs text-slate-500">Manage vault operations</p>
+                    </div>
+                </div>
+            </div>
+            <div className="p-6">
                 <Tabs defaultValue="heartbeat" className="w-full">
-                    <TabsList className="grid w-full grid-cols-4 bg-black/30">
-                        <TabsTrigger value="heartbeat" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+                    <TabsList className="grid w-full grid-cols-4 bg-black/40 border border-white/5 rounded-xl p-1">
+                        <TabsTrigger value="heartbeat" className="data-[state=active]:bg-cyan-500/20 data-[state=active]:text-cyan-400 rounded-lg text-xs">
                             Heartbeat
                         </TabsTrigger>
-                        <TabsTrigger value="deposit" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+                        <TabsTrigger value="deposit" className="data-[state=active]:bg-cyan-500/20 data-[state=active]:text-cyan-400 rounded-lg text-xs">
                             Deposit
                         </TabsTrigger>
-                        <TabsTrigger value="withdraw" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+                        <TabsTrigger value="withdraw" className="data-[state=active]:bg-cyan-500/20 data-[state=active]:text-cyan-400 rounded-lg text-xs">
                             Withdraw
                         </TabsTrigger>
-                        <TabsTrigger value="settings" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
+                        <TabsTrigger value="settings" className="data-[state=active]:bg-violet-500/20 data-[state=active]:text-violet-400 rounded-lg text-xs">
                             Settings
                         </TabsTrigger>
                     </TabsList>
@@ -327,23 +327,23 @@ export function VaultActions() {
                                     </Button>
                                 </div>
                             ) : isOwner && (
-                                <Button
+                                <button
                                     onClick={() => handleAction("ping", ping, "Heartbeat sent successfully! Timer reset.")}
                                     disabled={isAnyLoading}
-                                    className="h-20 text-lg bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-black font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="holo-button-primary h-20 w-full text-lg font-medium text-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 flex items-center justify-center gap-3"
                                 >
                                     {isLoading === "ping" || (isTransactionPending && isLoading === "ping") ? (
                                         <>
-                                            <Loader2 className="mr-3 h-6 w-6 animate-spin" />
-                                            Transaction Pending...
+                                            <Loader2 className="h-6 w-6 animate-spin" />
+                                            <span className="font-mono tracking-wide">TRANSMITTING...</span>
                                         </>
                                     ) : (
                                         <>
-                                            <Heart className="mr-3 h-6 w-6" />
-                                            PING - I&apos;m Alive!
+                                            <Heart className="h-6 w-6" />
+                                            <span className="font-mono tracking-wide">PING — I&apos;M ALIVE</span>
                                         </>
                                     )}
-                                </Button>
+                                </button>
                             )}
 
                             <Button
@@ -665,7 +665,7 @@ export function VaultActions() {
                         )}
                     </TabsContent>
                 </Tabs>
-            </CardContent>
-        </Card>
+            </div>
+        </div>
     );
 }
