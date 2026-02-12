@@ -1,62 +1,40 @@
-import { NovaSdk } from "nova-sdk-js";
-import { Buffer } from "buffer";
-
-// Hardcoded Testnet config to prevent accidental Mainnet usage
-const NOVA_CONFIG = {
-    accountId: process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID || "",
-    apiKey: process.env.NEXT_PUBLIC_NOVA_API_KEY || "",
-    contractId: "nova-sdk-5.testnet",
-    networkId: "testnet",
-    rpcUrl: "https://rpc.testnet.near.org",
-};
-
-const GROUP_NAME = "sentinel-hackathon-test";
-
-function getNovaSDK(): NovaSdk {
-    if (!NOVA_CONFIG.accountId || !NOVA_CONFIG.apiKey) {
-        throw new Error("NOVA Config missing");
-    }
-
-    return new NovaSdk(NOVA_CONFIG.accountId, {
-        apiKey: NOVA_CONFIG.apiKey,
-        contractId: NOVA_CONFIG.contractId,
-        rpcUrl: NOVA_CONFIG.rpcUrl,
-    });
-}
+/**
+ * NOVA client-side wrapper.
+ * All SDK calls go through our own API routes (/api/nova/upload, /api/nova/retrieve)
+ * which run server-side — no CORS, no exposed API keys in the browser.
+ */
 
 /**
- * Upload encrypted data to NOVA decentralized storage.
+ * Upload encrypted data to NOVA via our server-side proxy.
  * Returns "NOVA:<cid>" on success.
  */
 export async function uploadEncryptedData(encryptedText: string): Promise<string> {
-    console.log("🔐 NOVA CONFIG CHECK:", {
-        account: NOVA_CONFIG.accountId,
-        contract: NOVA_CONFIG.contractId,
+    console.log("🔐 NOVA: uploading via server proxy /api/nova/upload");
+
+    const res = await fetch("/api/nova/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: encryptedText }),
     });
 
-    const sdk = getNovaSDK();
-    const filename = `sentinel_${Date.now()}.enc`;
-
-    try {
-        await sdk.registerGroup(GROUP_NAME);
-    } catch {
-        // Group already exists
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || "NOVA upload failed");
     }
 
-    const buffer = Buffer.from(encryptedText, "utf-8");
-    const result = await sdk.upload(GROUP_NAME, buffer, filename);
+    const { cid } = await res.json();
 
-    if (!result?.cid) {
+    if (!cid) {
         throw new Error("Upload returned no CID");
     }
 
-    console.log("✅ NOVA upload OK, CID:", result.cid);
-    return `NOVA:${result.cid}`;
+    console.log("✅ NOVA upload OK, CID:", cid);
+    return `NOVA:${cid}`;
 }
 
 /**
  * Retrieve data from NOVA. If payload starts with "NOVA:" prefix,
- * fetches from IPFS. Otherwise returns raw payload as-is.
+ * fetches via our server-side proxy. Otherwise returns raw payload.
  */
 export async function retrieveEncryptedData(payload: string): Promise<string> {
     if (!payload.startsWith("NOVA:")) {
@@ -64,19 +42,34 @@ export async function retrieveEncryptedData(payload: string): Promise<string> {
     }
 
     const cid = payload.replace("NOVA:", "");
-    const sdk = getNovaSDK();
-    const result = await sdk.retrieve(GROUP_NAME, cid);
 
-    if (!result?.data) {
+    const res = await fetch("/api/nova/retrieve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cid }),
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || "NOVA retrieve failed");
+    }
+
+    const { data } = await res.json();
+
+    if (!data) {
         throw new Error("Retrieved empty data from NOVA");
     }
 
-    return result.data.toString("utf-8");
+    return data;
 }
 
 /**
- * Check if NOVA credentials are configured.
+ * Check if NOVA is configured (server-side check not possible from client,
+ * so we do a quick health check).
  */
 export function isNovaConfigured(): boolean {
-    return !!(NOVA_CONFIG.accountId && NOVA_CONFIG.apiKey);
+    return !!(
+        process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID &&
+        process.env.NEXT_PUBLIC_NOVA_API_KEY
+    );
 }

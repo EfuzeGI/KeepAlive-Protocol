@@ -784,6 +784,12 @@ const userNonceCache = {};
 // ═══════════════════════════════════════════════════════════════════
 
 async function processVault(rpc, accountId) {
+    // Kill switch: set AGENT_ACTIVE=false in Railway to pause all vault processing
+    if (process.env.AGENT_ACTIVE === 'false') {
+        log(`⏸️ Agent is PAUSED via env var. Skipping: ${accountId}`, C.yellow);
+        return;
+    }
+
     try {
         // Get vault status for this specific account
         const status = await viewMethod(rpc, 'get_vault', { account_id: accountId });
