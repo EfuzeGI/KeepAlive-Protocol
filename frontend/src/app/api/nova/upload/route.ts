@@ -6,7 +6,7 @@ const NOVA_AUTH_URL = "https://nova-sdk.com";
 const NOVA_MCP_URL = "https://nova-mcp.fastmcp.app";
 // Derive unique group name from account to ensure we own it
 const NOVA_ACCOUNT = process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID || "";
-const GROUP_NAME = NOVA_ACCOUNT.split(".")[0];
+const GROUP_NAME = NOVA_ACCOUNT || "sentinel-default";
 
 let tokenCache: { token: string; expiresAt: number } | null = null;
 
