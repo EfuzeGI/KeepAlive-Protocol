@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const GROUP_NAME = "sentinel-vault";
+const GROUP_NAME = "sentinel-final-v1";
 
 export async function POST(request: Request) {
     try {
