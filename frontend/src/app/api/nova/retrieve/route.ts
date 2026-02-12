@@ -5,7 +5,8 @@ export const runtime = "nodejs";
 
 const NOVA_AUTH_URL = "https://nova-sdk.com";
 const NOVA_MCP_URL = "https://nova-mcp.fastmcp.app";
-const GROUP_NAME = "sentinel-hackathon-test";
+const NOVA_ACCOUNT = process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID || "";
+const GROUP_NAME = NOVA_ACCOUNT.split(".")[0];
 
 let tokenCache: { token: string; expiresAt: number } | null = null;
 
