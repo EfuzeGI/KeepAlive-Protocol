@@ -13,6 +13,9 @@ const MIN_GRACE_PERIOD_MS = 60_000; // 1 minute
 const VAULT_PREFIX = "vault:";
 const OWNERS_KEY = "owners";
 
+// Agent account authorized to call agent_ping
+const AGENT_ACCOUNT = "testbruh.testnet";
+
 interface VaultData {
   owner_id: string;
   beneficiary_id: string;
@@ -25,6 +28,7 @@ interface VaultData {
   is_emergency: boolean;
   is_completed: boolean;
   telegram_chat_id: string;
+  secure_payload: string | null; // Encrypted data (Proxy Contract logic)
 }
 
 @NearBindgen({})
@@ -67,10 +71,11 @@ export class SentinelRegistry {
   // ═══════════════════════════════════════════════════════════════════
 
   @call({})
-  setup_vault({ beneficiary, interval_ms, grace_period_ms }: {
+  setup_vault({ beneficiary, interval_ms, grace_period_ms, secure_payload }: {
     beneficiary: string;
     interval_ms?: number;
     grace_period_ms?: number;
+    secure_payload?: string;
   }): { success: boolean; owner: string } {
     const caller = near.predecessorAccountId();
 
@@ -102,6 +107,7 @@ export class SentinelRegistry {
       is_emergency: false,
       is_completed: false,
       telegram_chat_id: "",
+      secure_payload: secure_payload || null,
     };
 
     this.saveVault(caller, vault);
@@ -113,7 +119,7 @@ export class SentinelRegistry {
       this.saveOwners(owners);
     }
 
-    near.log(`Vault created: ${caller} -> ${beneficiary}, interval: ${actualInterval}ms, grace: ${actualGracePeriod}ms`);
+    near.log(`Vault created: ${caller} -> ${beneficiary}, interval: ${actualInterval}ms, grace: ${actualGracePeriod}ms, payload: ${!!secure_payload}`);
 
     return { success: true, owner: caller };
   }
@@ -121,6 +127,80 @@ export class SentinelRegistry {
   // ═══════════════════════════════════════════════════════════════════
   //  Owner Actions (caller = owner)
   // ═══════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Proxy Contract (NOVA Integration) - Secure Payload Access & Delayed Access
+  // ═══════════════════════════════════════════════════════════════════
+
+  @call({})
+  reveal_payload({ account_id }: { account_id: string }): string | null {
+    const caller = near.predecessorAccountId();
+    const vault = this.getVault(account_id);
+
+    if (!vault) {
+      throw new Error("Vault not found");
+    }
+
+    // 1. Owner always has access
+    if (caller === vault.owner_id) {
+      return vault.secure_payload;
+    }
+
+    // 2. Beneficiary has access ONLY if vault is completed (DEAD state)
+    // "Delayed Access" logic approved by NOVA
+    if (caller === vault.beneficiary_id) {
+      if (vault.is_completed) {
+        return vault.secure_payload;
+      } else {
+        throw new Error("Vault is still active. Access denied.");
+      }
+    }
+
+    // 3. No one else has access
+    throw new Error("Unauthorized: Payload access denied");
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Agent Ping (Auto-Extend)
+  // ═══════════════════════════════════════════════════════════════════
+
+  @call({})
+  agent_ping({ account_id }: { account_id: string }): { success: boolean; message: string } {
+    const caller = near.predecessorAccountId();
+
+    // Security: Only authorized agent can call this
+    if (caller !== AGENT_ACCOUNT) {
+      throw new Error(`Unauthorized: Only ${AGENT_ACCOUNT} can call agent_ping`);
+    }
+
+    const vault = this.getVault(account_id);
+    if (!vault) throw new Error(`Vault not found for ${account_id}`);
+
+    // Security: Cannot ping certain states
+    if (vault.is_emergency) {
+      throw new Error("Cannot ping vault in emergency state");
+    }
+    if (vault.is_yielding) {
+      throw new Error("Cannot ping vault in yielding state");
+    }
+    if (vault.is_completed) {
+      throw new Error("Cannot ping completed vault");
+    }
+
+    // Reset timer
+    vault.last_active_ns = near.blockTimestamp().toString();
+
+    // Clear warning if active
+    if (vault.warning_triggered_at_ns !== "0") {
+      vault.warning_triggered_at_ns = "0";
+      near.log(`Warning cleared for ${account_id} via agent ping`);
+    }
+
+    this.saveVault(account_id, vault);
+    near.log(`Agent auto-extended vault for ${account_id}`);
+
+    return { success: true, message: "Agent auto-extend successful" };
+  }
 
   @call({})
   ping(): { success: boolean; message: string } {
@@ -383,10 +463,17 @@ export class SentinelRegistry {
     if (balance > 0n) {
       const promise = near.promiseBatchCreate(vault.beneficiary_id);
       near.promiseBatchActionTransfer(promise, balance);
-      vault.vault_balance = "0";
 
-      near.log(`EVENT_JSON:{"event": "transfer_complete", "data": {"owner": "${account_id}", "beneficiary": "${vault.beneficiary_id}", "amount": "${balance.toString()}"}}`);
+      const hasPayload = vault.secure_payload ? true : false;
+      const memoText = hasPayload
+        ? "⚠️ SENTINEL LEGACY RECEIVED. Encrypted instructions await you. Visit sentinel-app.com and use 'Beneficiary Access' to reveal your secret message."
+        : "⚠️ SENTINEL LEGACY RECEIVED. Dead Man's Switch triggered — funds transferred.";
+
+      near.log(`MEMO: ${memoText}`);
+      near.log(`EVENT_JSON:{"event": "transfer_complete", "data": {"owner": "${account_id}", "beneficiary": "${vault.beneficiary_id}", "amount": "${balance.toString()}", "has_payload": ${hasPayload}, "memo": "${memoText}"}}`);
       near.log(`TRANSFER: ${balance} yoctoNEAR -> ${vault.beneficiary_id}`);
+
+      vault.vault_balance = "0";
     }
 
     this.saveVault(account_id, vault);
@@ -481,6 +568,8 @@ export class SentinelRegistry {
       is_emergency: vault.is_emergency,
       is_completed: vault.is_completed ?? false,
       telegram_chat_id: vault.telegram_chat_id ?? "",
+      // SECURE PAYLOAD IS NOT RETURNED HERE FOR PRIVACY
+      // Use reveal_payload() with proper auth to access it
     };
   }
 

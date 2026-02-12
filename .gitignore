@@ -16,7 +16,11 @@ out/
 # NEAR credentials
 .near-credentials/
 *.json.bak
+
+# Agent runtime data
 subscribers.json
+known_vaults.json
+agent/.cache.json
 
 # IDE
 .idea/
@@ -24,6 +28,7 @@ subscribers.json
 *.swp
 *.swo
 *.sublime-*
+.gemini/
 
 # OS
 .DS_Store
@@ -45,4 +50,3 @@ coverage/
 .cache/
 .temp/
 tmp/
-

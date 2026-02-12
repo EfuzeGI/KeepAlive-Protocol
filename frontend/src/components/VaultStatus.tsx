@@ -13,13 +13,26 @@ import {
     Shield,
     Activity,
     User,
-    ArrowRight
+    ArrowRight,
+    Lock,
+    Unlock,
+    Loader2,
+    X,
+    Copy,
+    Check,
+    Cloud
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { retrieveEncryptedData } from "@/utils/nova";
 
 export function VaultStatus() {
-    const { vaultStatus, accountId, isConnected } = useNear();
+    const { vaultStatus, accountId, isConnected, revealPayload, isTransactionPending } = useNear();
     const [timeRemaining, setTimeRemaining] = useState<string>("");
     const [progressValue, setProgressValue] = useState(100);
+    const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+    const [revealError, setRevealError] = useState<string | null>(null);
+    const [isRevealing, setIsRevealing] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     // Format time remaining
     useEffect(() => {
@@ -260,6 +273,101 @@ export function VaultStatus() {
                             </div>
                         </div>
                     </div>
+
+                    {/* Reveal Secret Section */}
+                    {(isOwner || vaultStatus.beneficiary_id === accountId) && (
+                        <div className="space-y-3">
+                            {!revealedSecret && !revealError && (
+                                <Button
+                                    onClick={async () => {
+                                        setIsRevealing(true);
+                                        setRevealError(null);
+                                        try {
+                                            const rawPayload = await revealPayload();
+                                            if (rawPayload) {
+                                                // Handle NOVA-stored payloads
+                                                if (rawPayload.startsWith("NOVA:")) {
+                                                    const decrypted = await retrieveEncryptedData(rawPayload);
+                                                    setRevealedSecret(decrypted);
+                                                } else {
+                                                    setRevealedSecret(rawPayload);
+                                                }
+                                            } else {
+                                                setRevealError("No secret stored in this vault.");
+                                            }
+                                        } catch (err) {
+                                            const msg = err instanceof Error ? err.message : String(err);
+                                            if (msg.includes("Access denied") || msg.includes("still active")) {
+                                                setRevealError("🔒 Vault is still active. Access denied until vault triggers.");
+                                            } else if (msg.includes("Unauthorized")) {
+                                                setRevealError("🚫 Unauthorized: You don't have access to this secret.");
+                                            } else {
+                                                setRevealError(msg);
+                                            }
+                                        } finally {
+                                            setIsRevealing(false);
+                                        }
+                                    }}
+                                    disabled={isRevealing || isTransactionPending}
+                                    className="w-full h-11 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-medium"
+                                >
+                                    {isRevealing ? (
+                                        <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Revealing...</>
+                                    ) : (
+                                        <><Lock className="w-4 h-4 mr-2" /> Reveal Secret Payload</>
+                                    )}
+                                </Button>
+                            )}
+
+                            {revealedSecret && (
+                                <div className="p-4 rounded-xl bg-purple-500/10 border border-purple-500/30 relative">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2 text-purple-400 font-semibold text-sm">
+                                            <Unlock className="w-4 h-4" />
+                                            Decrypted Secret
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(revealedSecret);
+                                                    setCopied(true);
+                                                    setTimeout(() => setCopied(false), 2000);
+                                                }}
+                                                className="p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                                                title="Copy"
+                                            >
+                                                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                            </button>
+                                            <button
+                                                onClick={() => { setRevealedSecret(null); setCopied(false); }}
+                                                className="p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                                                title="Hide"
+                                            >
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="p-3 rounded-lg bg-black/40 font-mono text-sm text-white break-all select-all">
+                                        {revealedSecret}
+                                    </div>
+                                </div>
+                            )}
+
+                            {revealError && (
+                                <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-red-400 text-sm">{revealError}</span>
+                                        <button
+                                            onClick={() => setRevealError(null)}
+                                            className="p-1 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                                        >
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
         </div>

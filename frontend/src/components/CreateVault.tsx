@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Shield, Clock, User, Loader2, AlertCircle, Zap } from "lucide-react";
+import { Shield, Clock, User, Loader2, AlertCircle, Zap, Lock, Cloud } from "lucide-react";
+import { uploadEncryptedData, isNovaConfigured } from "@/utils/nova";
 
 // Interval presets in milliseconds
 const INTERVAL_PRESETS = [
@@ -31,6 +32,14 @@ export function CreateVault() {
     const [gracePeriodMs, setGracePeriodMs] = useState(60_000); // Default 1 min for testing
     const [error, setError] = useState<string | null>(null);
 
+    // Custom minute input states
+    const [showCustomInterval, setShowCustomInterval] = useState(false);
+    const [customIntervalMinutes, setCustomIntervalMinutes] = useState("");
+    const [showCustomGrace, setShowCustomGrace] = useState(false);
+    const [customGraceMinutes, setCustomGraceMinutes] = useState("");
+    const [securePayload, setSecurePayload] = useState("");
+    const [novaStatus, setNovaStatus] = useState<string | null>(null);
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -52,10 +61,29 @@ export function CreateVault() {
         }
 
         try {
-            await setupVault(beneficiary, intervalMs, gracePeriodMs);
+            let payloadToStore = securePayload || undefined;
+
+            // Upload to NOVA if secret exists and NOVA is configured
+            if (payloadToStore && isNovaConfigured()) {
+                setNovaStatus("Archiving to NOVA Decentralized Storage...");
+                try {
+                    payloadToStore = await uploadEncryptedData(payloadToStore);
+                    if (payloadToStore.startsWith("NOVA:")) {
+                        setNovaStatus("✅ Archived to NOVA (IPFS)");
+                    } else {
+                        setNovaStatus("⚠️ NOVA unavailable, storing directly");
+                    }
+                } catch {
+                    setNovaStatus("⚠️ NOVA unavailable, storing directly");
+                }
+            }
+
+            await setupVault(beneficiary, intervalMs, gracePeriodMs, payloadToStore);
+            setNovaStatus(null);
         } catch (err) {
             console.error("Failed to create vault:", err);
             setError(err instanceof Error ? err.message : "Failed to create vault");
+            setNovaStatus(null);
         }
     };
 
@@ -107,17 +135,52 @@ export function CreateVault() {
                                     <button
                                         key={preset.value}
                                         type="button"
-                                        onClick={() => setIntervalMs(preset.value)}
-                                        className={`p-2 text-sm rounded-lg border transition-all ${intervalMs === preset.value
-                                                ? "bg-emerald-500/20 border-emerald-500 text-emerald-400"
-                                                : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
+                                        onClick={() => {
+                                            setIntervalMs(preset.value);
+                                            setShowCustomInterval(false);
+                                            setCustomIntervalMinutes("");
+                                        }}
+                                        className={`p-2 text-sm rounded-lg border transition-all ${intervalMs === preset.value && !showCustomInterval
+                                            ? "bg-emerald-500/20 border-emerald-500 text-emerald-400"
+                                            : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
                                             }`}
                                         disabled={isTransactionPending}
                                     >
                                         {preset.label}
                                     </button>
                                 ))}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCustomInterval(!showCustomInterval)}
+                                    className={`p-2 text-sm rounded-lg border transition-all ${showCustomInterval
+                                        ? "bg-cyan-500/20 border-cyan-500 text-cyan-400"
+                                        : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
+                                        }`}
+                                    disabled={isTransactionPending}
+                                >
+                                    Custom ⚙️
+                                </button>
                             </div>
+                            {showCustomInterval && (
+                                <div className="flex gap-2 items-center mt-2">
+                                    <Input
+                                        type="number"
+                                        min="1"
+                                        placeholder="Minutes"
+                                        value={customIntervalMinutes}
+                                        onChange={(e) => {
+                                            setCustomIntervalMinutes(e.target.value);
+                                            const minutes = parseInt(e.target.value);
+                                            if (minutes > 0) {
+                                                setIntervalMs(minutes * 60_000);
+                                            }
+                                        }}
+                                        className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-500"
+                                        disabled={isTransactionPending}
+                                    />
+                                    <span className="text-slate-400 text-sm whitespace-nowrap">minutes</span>
+                                </div>
+                            )}
                             <p className="text-xs text-slate-500">
                                 How often you need to send a heartbeat to keep your vault safe
                             </p>
@@ -129,26 +192,94 @@ export function CreateVault() {
                                 <Zap className="w-4 h-4" />
                                 Warning Grace Period
                             </Label>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 gap-2">
                                 {GRACE_PERIOD_PRESETS.map((preset) => (
                                     <button
                                         key={preset.value}
                                         type="button"
-                                        onClick={() => setGracePeriodMs(preset.value)}
-                                        className={`p-2 text-sm rounded-lg border transition-all ${gracePeriodMs === preset.value
-                                                ? "bg-amber-500/20 border-amber-500 text-amber-400"
-                                                : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
+                                        onClick={() => {
+                                            setGracePeriodMs(preset.value);
+                                            setShowCustomGrace(false);
+                                            setCustomGraceMinutes("");
+                                        }}
+                                        className={`p-2 text-sm rounded-lg border transition-all ${gracePeriodMs === preset.value && !showCustomGrace
+                                            ? "bg-amber-500/20 border-amber-500 text-amber-400"
+                                            : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
                                             }`}
                                         disabled={isTransactionPending}
                                     >
                                         {preset.label}
                                     </button>
                                 ))}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCustomGrace(!showCustomGrace)}
+                                    className={`p-2 text-sm rounded-lg border transition-all ${showCustomGrace
+                                        ? "bg-cyan-500/20 border-cyan-500 text-cyan-400"
+                                        : "bg-slate-800/50 border-slate-600 text-slate-400 hover:border-slate-500"
+                                        }`}
+                                    disabled={isTransactionPending}
+                                >
+                                    Custom ⚙️
+                                </button>
                             </div>
+                            {showCustomGrace && (
+                                <div className="flex gap-2 items-center mt-2">
+                                    <Input
+                                        type="number"
+                                        min="1"
+                                        placeholder="Minutes"
+                                        value={customGraceMinutes}
+                                        onChange={(e) => {
+                                            setCustomGraceMinutes(e.target.value);
+                                            const minutes = parseInt(e.target.value);
+                                            if (minutes > 0) {
+                                                setGracePeriodMs(minutes * 60_000);
+                                            }
+                                        }}
+                                        className="bg-slate-800/50 border-slate-600 text-white placeholder:text-slate-500"
+                                        disabled={isTransactionPending}
+                                    />
+                                    <span className="text-slate-400 text-sm whitespace-nowrap">minutes</span>
+                                </div>
+                            )}
                             <p className="text-xs text-slate-500">
                                 Time you have to respond after warning is triggered
                             </p>
                         </div>
+
+                        {/* Secure Payload (NOVA) */}
+                        <div className="space-y-2">
+                            <Label htmlFor="securePayload" className="text-slate-300 flex items-center gap-2">
+                                <Lock className="w-4 h-4" />
+                                Secret Message (Optional)
+                            </Label>
+                            <textarea
+                                id="securePayload"
+                                placeholder="Enter seed phrase, private key, or any secret to pass on..."
+                                value={securePayload}
+                                onChange={(e) => setSecurePayload(e.target.value)}
+                                className="w-full min-h-[80px] px-3 py-2 rounded-md bg-slate-800/50 border border-slate-600 text-white placeholder:text-slate-500 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50"
+                                disabled={isTransactionPending}
+                            />
+                            <p className="text-xs text-slate-500">
+                                🔐 This secret will only be revealed to your beneficiary after the vault triggers (Dead Man&apos;s Switch)
+                            </p>
+                            {isNovaConfigured() && securePayload && (
+                                <p className="text-xs text-purple-400 flex items-center gap-1">
+                                    <Cloud className="w-3 h-3" />
+                                    Will be archived to NOVA decentralized storage (IPFS)
+                                </p>
+                            )}
+                        </div>
+
+                        {/* NOVA Upload Status */}
+                        {novaStatus && (
+                            <div className="flex items-center gap-2 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg text-purple-300 text-sm">
+                                {novaStatus.startsWith("✅") ? null : <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />}
+                                {novaStatus}
+                            </div>
+                        )}
 
                         {/* Error Message */}
                         {error && (

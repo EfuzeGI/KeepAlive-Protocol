@@ -4,6 +4,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import http from 'http';
 
 dotenv.config();
 
@@ -22,9 +23,9 @@ const __dirname = path.dirname(__filename);
 // ═══════════════════════════════════════════════════════════════════
 
 const RPC_ENDPOINTS = [
-    'https://testnet.rpc.fastnear.com',
-    'https://rpc.testnet.near.org',
-    'https://near-testnet.drpc.org',
+    'https://testnet.rpc.fastnear.com',   // Primary - fastest, no rate limits
+    'https://rpc.testnet.pagoda.co',      // Fallback 1
+    'https://rpc.testnet.near.org',       // Fallback 2 - official
 ];
 
 const cfg = {
@@ -32,10 +33,36 @@ const cfg = {
     contractId: process.env.CONTRACT_ID || 'testbruh.testnet',
     agentId: process.env.AGENT_ACCOUNT_ID || 'testbruh.testnet',
     agentKey: process.env.AGENT_PRIVATE_KEY,
-    pollInterval: 15_000,
-    rpcTimeout: 15_000,
+    pollInterval: 30_000, // Check every 30 seconds (less aggressive)
+    rpcTimeout: 30_000, // 30 seconds - public testnet RPCs are slow
     warningAmount: '10000000000000000000', // 0.00001 NEAR
 };
+
+// ═══════════════════════════════════════════════════════════════════
+//  Persistent Activity Cache (Survives Restarts)
+// ═══════════════════════════════════════════════════════════════════
+
+const CACHE_FILE = path.join(__dirname, '.cache.json');
+
+// Load cache from file on startup
+let userActivityCache = {};
+try {
+    if (fs.existsSync(CACHE_FILE)) {
+        userActivityCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    }
+} catch (e) {
+    // If cache corrupted, start fresh
+    userActivityCache = {};
+}
+
+// Save cache to file
+function saveCache() {
+    try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(userActivityCache, null, 2));
+    } catch (e) {
+        // Ignore write errors silently
+    }
+}
 
 const C = {
     reset: '\x1b[0m',
@@ -55,13 +82,72 @@ const log = (msg, c = C.reset) => console.log(`${C.dim}[${ts()}]${C.reset} ${c}$
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ═══════════════════════════════════════════════════════════════════
-//  RPC Manager
+//  RPC Manager - AGGRESSIVE FAIL-FAST
 // ═══════════════════════════════════════════════════════════════════
+
+async function testRpcEndpoint(url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), cfg.rpcTimeout);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 'health-check',
+                method: 'status',
+                params: []
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        return response.ok;
+    } catch (e) {
+        clearTimeout(timeout);
+        return false;
+    }
+}
+
+async function getFastProvider(ks, retryCount = 0) {
+    for (const url of RPC_ENDPOINTS) {
+        log(`Testing: ${url}`, C.dim);
+
+        try {
+            // Try direct connection with nearAPI (more reliable than fetch ping)
+            const near = await Promise.race([
+                nearAPI.connect({
+                    networkId: cfg.networkId,
+                    keyStore: ks,
+                    nodeUrl: url
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), cfg.rpcTimeout))
+            ]);
+
+            const acc = await near.account(cfg.agentId);
+            log(`RPC: ${url}`, C.cyan);
+            log('Connected', C.green);
+            return { acc, url, idx: RPC_ENDPOINTS.indexOf(url) };
+        } catch (e) {
+            log(`Skip (${e.message}): ${url}`, C.yellow);
+        }
+    }
+
+    // All failed - retry with delay
+    if (retryCount < 3) {
+        log(`⚠️ All RPCs busy. Waiting 5s before retry (${retryCount + 1}/3)...`, C.orange);
+        await sleep(5000);
+        return getFastProvider(ks, retryCount + 1);
+    }
+
+    throw new Error('All RPC endpoints failed after 3 retries!');
+}
 
 class Rpc {
     constructor() {
         this.idx = 0;
         this.acc = null;
+        this.url = null;
         this.ks = new nearAPI.keyStores.InMemoryKeyStore();
     }
 
@@ -73,16 +159,59 @@ class Rpc {
     }
 
     async connect() {
-        const url = RPC_ENDPOINTS[this.idx];
-        log(`RPC: ${url}`, C.cyan);
-        const near = await nearAPI.connect({ networkId: cfg.networkId, keyStore: this.ks, nodeUrl: url });
-        this.acc = await near.account(cfg.agentId);
-        log('Connected', C.green);
+        const result = await getFastProvider(this.ks);
+        this.acc = result.acc;
+        this.url = result.url;
+        this.idx = result.idx;
     }
 
-    rotate() {
-        this.idx = (this.idx + 1) % RPC_ENDPOINTS.length;
-        log(`Rotating RPC...`, C.yellow);
+    async rotate() {
+        // Try next RPC in priority order, starting after current
+        const startIdx = (this.idx + 1) % RPC_ENDPOINTS.length;
+
+        for (let i = 0; i < RPC_ENDPOINTS.length; i++) {
+            const tryIdx = (startIdx + i) % RPC_ENDPOINTS.length;
+            const url = RPC_ENDPOINTS[tryIdx];
+
+            const isAlive = await testRpcEndpoint(url);
+
+            if (isAlive) {
+                try {
+                    const near = await nearAPI.connect({
+                        networkId: cfg.networkId,
+                        keyStore: this.ks,
+                        nodeUrl: url
+                    });
+                    this.acc = await near.account(cfg.agentId);
+                    this.url = url;
+                    this.idx = tryIdx;
+                    return;
+                } catch (e) {
+                    // Connection failed, try next
+                }
+            }
+        }
+
+        // All RPCs failed - wait and retry Primary
+        await sleep(3000);
+
+        // Force connect to Primary
+        const primaryUrl = RPC_ENDPOINTS[0];
+
+        try {
+            const near = await nearAPI.connect({
+                networkId: cfg.networkId,
+                keyStore: this.ks,
+                nodeUrl: primaryUrl
+            });
+            this.acc = await near.account(cfg.agentId);
+            this.url = primaryUrl;
+            this.idx = 0;
+            log('Connected', C.green);
+        } catch (e) {
+            log(`Primary still down: ${e.message}. Will retry next cycle.`, C.red);
+            // Don't throw - let the main loop continue and retry
+        }
     }
 }
 
@@ -91,20 +220,19 @@ class Rpc {
 // ═══════════════════════════════════════════════════════════════════
 
 async function viewMethod(rpc, method, args = {}) {
-    for (let attempt = 0; attempt < RPC_ENDPOINTS.length; attempt++) {
+    for (let attempt = 0; attempt < RPC_ENDPOINTS.length + 1; attempt++) {
         try {
             return await Promise.race([
                 rpc.acc.viewFunction({ contractId: cfg.contractId, methodName: method, args }),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), cfg.rpcTimeout)),
             ]);
         } catch (e) {
-            if (attempt < RPC_ENDPOINTS.length - 1) {
-                rpc.rotate();
-                await rpc.connect();
+            if (attempt < RPC_ENDPOINTS.length) {
+                await rpc.rotate();
             }
         }
     }
-    throw new Error(`View failed: ${method}`);
+    return null; // Return null instead of throwing - caller handles it
 }
 
 async function callMethod(rpc, method, args = {}, deposit = '0') {
@@ -120,12 +248,53 @@ async function callMethod(rpc, method, args = {}, deposit = '0') {
         } catch (e) {
             if (e.message?.includes('no matching key pair')) throw e;
             if (attempt < RPC_ENDPOINTS.length - 1) {
-                rpc.rotate();
-                await rpc.connect();
+                await rpc.rotate();
             }
         }
     }
     throw new Error(`Call failed: ${method}`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Native Activity Check (Passive Liveness via RPC)
+// ═══════════════════════════════════════════════════════════════════
+
+async function checkNativeActivity(rpc, accountId) {
+    try {
+        // Get all access keys for the account
+        const url = RPC_ENDPOINTS[rpc.idx];
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 'activity-check',
+                method: 'query',
+                params: {
+                    request_type: 'view_access_key_list',
+                    finality: 'final',
+                    account_id: accountId
+                }
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.error || !data.result?.keys) {
+            log(`[${accountId}] Activity check failed: ${data.error?.message || 'no keys'}`, C.dim);
+            return 0;
+        }
+
+        // Sum all nonces
+        const totalNonce = data.result.keys.reduce((sum, key) => {
+            return sum + BigInt(key.access_key.nonce);
+        }, 0n);
+
+        return totalNonce;
+    } catch (e) {
+        log(`[${accountId}] Activity check error: ${e.message}`, C.dim);
+        return 0n;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -158,6 +327,7 @@ async function sendWarningShot(rpc, ownerId) {
 // ═══════════════════════════════════════════════════════════════════
 
 const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
+const KNOWN_VAULTS_FILE = path.join(__dirname, 'known_vaults.json');
 
 // Load subscribers: { "chatId": ["wallet1", "wallet2"] }
 function loadSubscribers() {
@@ -180,11 +350,45 @@ function saveSubscribers(subscribers) {
     }
 }
 
-// Get all unique wallets being watched
+// Load known vaults (auto-registered, independent of Telegram)
+function loadKnownVaults() {
+    try {
+        if (fs.existsSync(KNOWN_VAULTS_FILE)) {
+            return JSON.parse(fs.readFileSync(KNOWN_VAULTS_FILE, 'utf8'));
+        }
+    } catch (e) {
+        log(`Error loading known vaults: ${e.message}`, C.red);
+    }
+    return [];
+}
+
+// Save known vaults
+function saveKnownVaults(vaults) {
+    try {
+        fs.writeFileSync(KNOWN_VAULTS_FILE, JSON.stringify(vaults, null, 2));
+    } catch (e) {
+        log(`Error saving known vaults: ${e.message}`, C.red);
+    }
+}
+
+// Register a vault (called from HTTP API or internally)
+function registerVault(walletId) {
+    const vaults = loadKnownVaults();
+    if (!vaults.includes(walletId)) {
+        vaults.push(walletId);
+        saveKnownVaults(vaults);
+        log(`📋 Vault registered: ${walletId}`, C.green);
+        return true;
+    }
+    return false; // Already registered
+}
+
+// Get all unique wallets: merge Telegram subscribers + known vaults
 function getAllWatchedWallets() {
-    const subscribers = loadSubscribers();
     const wallets = new Set();
 
+    // Source 1: Telegram subscribers
+    const subscribers = loadSubscribers();
     for (const walletList of Object.values(subscribers)) {
         if (Array.isArray(walletList)) {
             for (const wallet of walletList) {
@@ -193,7 +397,80 @@ function getAllWatchedWallets() {
         }
     }
 
+    // Source 2: Known vaults (auto-registered from frontend)
+    const knownVaults = loadKnownVaults();
+    for (const vault of knownVaults) {
+        wallets.add(vault);
+    }
+
     return Array.from(wallets);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  HTTP API - Auto-register vaults from frontend (port 3001)
+// ═══════════════════════════════════════════════════════════════════
+
+function startHttpApi() {
+    const PORT = process.env.AGENT_API_PORT || 3001;
+
+    const server = http.createServer((req, res) => {
+        // CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+
+        // POST /register-vault  { wallet_id: "user.testnet" }
+        if (req.method === 'POST' && req.url === '/register-vault') {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                try {
+                    const { wallet_id } = JSON.parse(body);
+                    if (!wallet_id || typeof wallet_id !== 'string') {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'wallet_id is required' }));
+                        return;
+                    }
+
+                    const isNew = registerVault(wallet_id);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, registered: isNew, wallet_id }));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                }
+            });
+            return;
+        }
+
+        // GET /vaults - list all watched vaults
+        if (req.method === 'GET' && req.url === '/vaults') {
+            const wallets = getAllWatchedWallets();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ vaults: wallets, count: wallets.length }));
+            return;
+        }
+
+        // GET /health
+        if (req.method === 'GET' && req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+            return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+    });
+
+    server.listen(PORT, () => {
+        log(`🌐 Agent API running on port ${PORT}`, C.green);
+    });
 }
 
 // Initialize Telegram bot
@@ -497,7 +774,13 @@ function formatTime(ms) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Process Single Vault
+//  Nonce Cache (Tracks outgoing tx activity per account)
+// ═══════════════════════════════════════════════════════════════════
+
+const userNonceCache = {};
+
+// ═══════════════════════════════════════════════════════════════════
+//  Process Single Vault — 75/25 Smart Monitoring
 // ═══════════════════════════════════════════════════════════════════
 
 async function processVault(rpc, accountId) {
@@ -506,21 +789,49 @@ async function processVault(rpc, accountId) {
         const status = await viewMethod(rpc, 'get_vault', { account_id: accountId });
 
         if (!status) {
-            // No vault for this account - skip silently
-            return;
+            return; // No vault or RPC failure — silently skip
         }
 
         const prefix = `[${accountId}]`;
 
+        // ─────────────────────────────────────────────
+        //  PRIORITY 1: EMERGENCY (Transfer completed)
+        // ─────────────────────────────────────────────
         if (status.is_emergency) {
-            log(`${prefix} ${C.bold}EMERGENCY${C.reset} - Transfer complete`, C.red);
+            const emergencyKey = `emergency_${accountId}`;
+
+            // First time detecting emergency
+            if (!userActivityCache[emergencyKey]) {
+                log(`${prefix} ${C.bold}🔴 EMERGENCY${C.reset} — Transfer complete`, C.red);
+
+                userActivityCache[emergencyKey] = true;
+                saveCache(); // Persist to file
+
+                const emergencyMessage = `🚨 *SENTINEL EMERGENCY* 🚨
+
+💀 *TRANSFER COMPLETED*
+
+The grace period expired and funds have been transferred to the beneficiary.
+
+Vault: \`${accountId}\`
+Beneficiary: \`${status.beneficiary_id}\`
+
+This vault is now in EMERGENCY state.`;
+
+                await sendTelegramAlert(accountId, emergencyMessage, status);
+                log(`${prefix} Emergency alert sent to Telegram`, C.red);
+            }
+            // Already alerted - silently skip
+            return;
         }
-        else if (status.is_yielding) {
-            // LEVEL 2: Contract in YIELD - perform verification
-            log(`${prefix} ${C.bold}YIELD STATE${C.reset} - Starting verification...`, C.magenta);
+
+        // ─────────────────────────────────────────────
+        //  PRIORITY 2: YIELD STATE (Level 2 verification)
+        // ─────────────────────────────────────────────
+        if (status.is_yielding) {
+            log(`${prefix} ${C.bold}⚡ YIELD STATE${C.reset} — Starting verification...`, C.magenta);
 
             const confirmDeath = await performDigitalLifeCheck(status.owner_id);
-
             log(`${prefix} Calling resume_pulse(${confirmDeath})...`, C.cyan);
 
             try {
@@ -531,7 +842,6 @@ async function processVault(rpc, accountId) {
 
                 if (confirmDeath) {
                     log(`${prefix} ${C.bold}🔴 TRANSFER EXECUTED${C.reset}`, C.red);
-
                     await sendTelegramAlert(accountId,
                         `🔴 *SENTINEL ALERT*\n\n` +
                         `💀 *TRANSFER EXECUTED*\n\n` +
@@ -541,15 +851,19 @@ async function processVault(rpc, accountId) {
                         status
                     );
                 } else {
-                    log(`${prefix} ${C.bold}🟢 YIELD CANCELLED${C.reset} - Owner alive`, C.green);
+                    log(`${prefix} ${C.bold}🟢 YIELD CANCELLED${C.reset} — Owner alive`, C.green);
                 }
             } catch (e) {
                 log(`${prefix} resume_pulse failed: ${e.message}`, C.red);
             }
+            return;
         }
-        else if (status.is_execution_ready) {
-            // Grace period passed - initiate YIELD
-            log(`${prefix} ${C.bold}GRACE PERIOD EXPIRED${C.reset} - Initiating yield...`, C.orange);
+
+        // ─────────────────────────────────────────────
+        //  PRIORITY 3: EXECUTION READY (grace expired)
+        // ─────────────────────────────────────────────
+        if (status.is_execution_ready) {
+            log(`${prefix} ${C.bold}⏰ GRACE PERIOD EXPIRED${C.reset} — Initiating yield...`, C.orange);
 
             try {
                 await callMethod(rpc, 'check_pulse', { account_id: accountId });
@@ -557,26 +871,134 @@ async function processVault(rpc, accountId) {
             } catch (e) {
                 log(`${prefix} check_pulse failed: ${e.message}`, C.red);
             }
+            return;
         }
-        else if (status.is_warning_active) {
-            // LEVEL 1.5: Warning sent, waiting grace period
+
+        // ─────────────────────────────────────────────
+        //  PRIORITY 4: WARNING ACTIVE (waiting grace)
+        // ─────────────────────────────────────────────
+        if (status.is_warning_active) {
             const remaining = formatTime(status.warning_grace_remaining_ms);
             log(`${prefix} ${C.bold}⏳ WARNING ACTIVE${C.reset} | ${remaining} until execution eligible`, C.yellow);
+            return;
         }
-        else if (status.is_expired) {
-            // LEVEL 1: Expired but no warning - send warning
-            log(`${prefix} ${C.bold}⚠️  HEARTBEAT EXPIRED${C.reset} - Triggering warning...`, C.orange);
+
+        // ─────────────────────────────────────────────
+        //  75/25 SMART MONITORING (Normal + Expired)
+        // ─────────────────────────────────────────────
+
+        const intervalMs = BigInt(status.heartbeat_interval_ms);
+        const timeRemainingMs = BigInt(status.time_remaining_ms);
+        const dangerZone = intervalMs / 4n; // 25% of interval
+        const balance = (BigInt(status.vault_balance) / 10n ** 24n).toString();
+
+        // ── SAFE ZONE (>75% time remaining) ──
+        if (timeRemainingMs > dangerZone && !status.is_expired) {
+            const remaining = formatTime(status.time_remaining_ms);
+            const pct = Number((timeRemainingMs * 100n) / intervalMs);
+
+            // Pre-seed nonce in safe zone so it's ready for danger zone comparison
+            if (userNonceCache[status.owner_id] === undefined) {
+                const nonce = await checkNativeActivity(rpc, status.owner_id);
+                userNonceCache[status.owner_id] = nonce;
+                log(`${prefix} ${C.green}🟢 Safe Zone${C.reset} (${pct}%) | ${remaining} left | ${balance} NEAR — Nonce cached.`, C.dim);
+            } else {
+                log(`${prefix} ${C.green}🟢 Safe Zone${C.reset} (${pct}%) | ${remaining} left | ${balance} NEAR — Skipping.`, C.dim);
+            }
+            return; // No further action needed
+        }
+
+        // ── DANGER ZONE (≤25% time remaining OR expired) ──
+        const remaining = formatTime(status.time_remaining_ms);
+
+        if (status.is_expired) {
+            log(`${prefix} ${C.bold}🔴 EXPIRED${C.reset} — Entering Danger Zone check...`, C.orange);
+        } else {
+            const pct = Number((timeRemainingMs * 100n) / intervalMs);
+            log(`${prefix} ${C.bold}🟡 Danger Zone${C.reset} (${pct}%) | ${remaining} left — Checking activity...`, C.yellow);
+        }
+
+        // ── NONCE-BASED ACTIVITY CHECK ──
+        const currentNonce = await checkNativeActivity(rpc, status.owner_id);
+        const cachedNonce = userNonceCache[status.owner_id];
+
+        // First run: seed the cache if somehow not seeded in safe zone
+        if (cachedNonce === undefined) {
+            userNonceCache[status.owner_id] = currentNonce;
+            log(`${prefix} 📊 Nonce seeded: ${currentNonce}`, C.dim);
+            // Don't return! Continue to check if expired below
+        }
+
+        // ── NONCE CHANGED → User is ALIVE (outgoing tx detected) ──
+        if (cachedNonce !== undefined && currentNonce > cachedNonce) {
+            log(`${prefix} ${C.bold}🔵 ACTIVITY DETECTED!${C.reset} Nonce: ${cachedNonce} → ${currentNonce}`, C.cyan);
+            log(`${prefix} Auto-pinging on behalf of user...`, C.green);
 
             try {
-                await callMethod(rpc, 'trigger_warning', { account_id: accountId });
-                log(`${prefix} Warning triggered on-chain`, C.yellow);
+                await callMethod(rpc, 'agent_ping', { account_id: accountId });
+                log(`${prefix} ${C.bold}✅ AUTO-PING SUCCESSFUL${C.reset} — Timer reset`, C.green);
 
-                // Send dust transaction to owner
-                await sendWarningShot(rpc, status.owner_id);
+                // Positive Telegram notification
+                await sendTelegramAlert(accountId,
+                    `✅ *SENTINEL — Auto-Extend*\n\n` +
+                    `🔵 Saw you active on-chain.\n` +
+                    `Vault: \`${accountId}\`\n` +
+                    `Timer has been automatically extended.\n\n` +
+                    `Stay safe. 🛡️`,
+                    status
+                );
+            } catch (e) {
+                log(`${prefix} Auto-ping failed: ${e.message}`, C.red);
+            }
 
-                // Send Telegram notification with dynamic grace period
-                const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
-                const alertMessage = `🚨 *SENTINEL ALERT* 🚨
+            userNonceCache[status.owner_id] = currentNonce;
+            return;
+        }
+
+        // ── NONCE UNCHANGED → User is SILENT ──
+        userNonceCache[status.owner_id] = currentNonce;
+        log(`${prefix} 🔇 No activity detected. Nonce unchanged: ${currentNonce}`, C.yellow);
+
+        if (status.is_expired) {
+            // Expired + no activity → trigger warning
+            await triggerWarningShot(rpc, accountId, status, prefix);
+        } else {
+            // In danger zone but not expired yet — just alert
+            const warningKey = `dangerzone_${accountId}`;
+            if (!userActivityCache[warningKey]) {
+                userActivityCache[warningKey] = true;
+
+                await sendTelegramAlert(accountId,
+                    `⚠️ *SENTINEL WARNING*\n\n` +
+                    `No on-chain activity detected.\n` +
+                    `Vault: \`${accountId}\`\n` +
+                    `Time remaining: *${remaining}*\n\n` +
+                    `👉 [PING NOW](https://sentinel-agent.netlify.app/) to keep your vault alive!`,
+                    status
+                );
+                log(`${prefix} ⚠️ Danger zone warning sent`, C.yellow);
+            }
+        }
+    } catch (e) {
+        log(`[${accountId}] Error: ${e.message}`, C.red);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Warning Shot — Trigger on-chain warning + dust tx + Telegram
+// ═══════════════════════════════════════════════════════════════════
+
+async function triggerWarningShot(rpc, accountId, status, prefix) {
+    try {
+        await callMethod(rpc, 'trigger_warning', { account_id: accountId });
+        log(`${prefix} Warning triggered on-chain`, C.yellow);
+
+        // Send dust transaction to owner
+        await sendWarningShot(rpc, status.owner_id);
+
+        // Send Telegram notification
+        const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
+        const alertMessage = `🚨 *SENTINEL ALERT* 🚨
 
 ⚠️ *Protocol 'Warning Shot' INITIATED*
 
@@ -586,21 +1008,11 @@ Funds will be transferred to the beneficiary in *${gracePeriodFormatted}* unless
 
 👉 [PING NOW TO ABORT](https://sentinel-agent.netlify.app/)`;
 
-                await sendTelegramAlert(accountId, alertMessage, status);
+        await sendTelegramAlert(accountId, alertMessage, status);
 
-                log(`${prefix} ${C.bold}🟡 WARNING SHOT FIRED${C.reset} - ${gracePeriodFormatted} grace period started`, C.yellow);
-            } catch (e) {
-                log(`${prefix} Warning trigger failed: ${e.message}`, C.red);
-            }
-        }
-        else {
-            // Normal operation
-            const remaining = formatTime(status.time_remaining_ms);
-            const balance = (BigInt(status.vault_balance) / 10n ** 24n).toString();
-            log(`${prefix} ${C.green}✓${C.reset} ${remaining} remaining | ${balance} NEAR`);
-        }
+        log(`${prefix} ${C.bold}🟡 WARNING SHOT FIRED${C.reset} — ${gracePeriodFormatted} grace period started`, C.yellow);
     } catch (e) {
-        log(`[${accountId}] Error: ${e.message}`, C.red);
+        log(`${prefix} Warning trigger failed: ${e.message}`, C.red);
     }
 }
 
@@ -631,6 +1043,9 @@ async function main() {
 
     // Initialize Telegram bot for deep linking
     initTelegramBot();
+
+    // Start HTTP API for auto-registering vaults from frontend
+    startHttpApi();
 
     log('Multi-vault monitoring started...', C.green);
     console.log();

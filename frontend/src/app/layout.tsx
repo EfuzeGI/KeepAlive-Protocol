@@ -14,10 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body
-        className="font-sans antialiased bg-[#0A0A0B] text-white min-h-screen"
-        style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' }}
-      >
+      <body className="min-h-screen bg-[#050505] text-white antialiased">
         <NearProvider>
           {children}
         </NearProvider>

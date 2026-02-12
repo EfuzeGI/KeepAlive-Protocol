@@ -62,7 +62,8 @@ interface NearContextType {
     checkPulse: () => Promise<{ status: string; time_remaining_ms: string; is_emergency: boolean } | null>;
     deposit: (amount: string) => Promise<void>;
     withdraw: (amount?: string) => Promise<void>;
-    setupVault: (beneficiary: string, intervalMs: number, gracePeriodMs?: number) => Promise<void>;
+    setupVault: (beneficiary: string, intervalMs: number, gracePeriodMs?: number, securePayload?: string) => Promise<void>;
+    revealPayload: (ownerAccountId?: string) => Promise<string | null>;
     updateBeneficiary: (newBeneficiary: string) => Promise<void>;
     updateInterval: (newIntervalMs: number) => Promise<void>;
     updateGracePeriod: (newGracePeriodMs: number) => Promise<void>;
@@ -99,6 +100,21 @@ const safeLocalStorage = {
         }
     }
 };
+
+// Auto-register vault with agent API (fire-and-forget)
+const AGENT_API_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:3001';
+
+async function registerVaultWithAgent(walletId: string) {
+    try {
+        await fetch(`${AGENT_API_URL}/register-vault`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ wallet_id: walletId }),
+        });
+    } catch {
+        // Agent may be offline - that's OK, vault still works on-chain
+    }
+}
 
 // Call view method with RPC fallback - NOW accepts args
 async function callViewMethodWithFallback(methodName: string, args: object = {}): Promise<unknown> {
@@ -265,6 +281,9 @@ export function NearProvider({ children }: { children: ReactNode }) {
 
                 safeLocalStorage.setItem(STORAGE_KEY_INITIALIZED, "true");
                 safeLocalStorage.setItem(STORAGE_KEY_CACHED_STATUS, JSON.stringify(status));
+
+                // Auto-register with agent (fire-and-forget)
+                registerVaultWithAgent(accountId);
             } else {
                 // No vault for this user - show create vault screen
                 setVaultStatus(null);
@@ -393,13 +412,16 @@ export function NearProvider({ children }: { children: ReactNode }) {
     }, [callMethod, refreshStatus]);
 
     // Setup vault - NEW method name matching contract
-    const setupVault = useCallback(async (beneficiary: string, intervalMs: number, gracePeriodMs?: number) => {
-        const args: { beneficiary: string; interval_ms: number; grace_period_ms?: number } = {
+    const setupVault = useCallback(async (beneficiary: string, intervalMs: number, gracePeriodMs?: number, securePayload?: string) => {
+        const args: { beneficiary: string; interval_ms: number; grace_period_ms?: number; secure_payload?: string } = {
             beneficiary,
             interval_ms: intervalMs,
         };
         if (gracePeriodMs) {
             args.grace_period_ms = gracePeriodMs;
+        }
+        if (securePayload) {
+            args.secure_payload = securePayload;
         }
 
         await callMethod(
@@ -412,6 +434,46 @@ export function NearProvider({ children }: { children: ReactNode }) {
         safeLocalStorage.setItem(STORAGE_KEY_INITIALIZED, "true");
         await refreshStatus();
     }, [callMethod, refreshStatus]);
+
+    // Reveal secure payload - calls contract @call method (requires signature)
+    // ownerAccountId: optional, for beneficiary revealing someone else's vault
+    const revealPayload = useCallback(async (ownerAccountId?: string): Promise<string | null> => {
+        if (!accountId || !selector) return null;
+
+        const targetAccount = ownerAccountId || accountId;
+
+        setIsTransactionPending(true);
+        try {
+            const wallet = await selector.wallet();
+            const action = functionCall(
+                "reveal_payload",
+                { account_id: targetAccount },
+                BigInt("30000000000000"),
+                BigInt(0)
+            );
+
+            const result = await wallet.signAndSendTransaction({
+                receiverId: CONTRACT_ID,
+                actions: [action],
+            });
+
+            // Parse the return value from transaction outcome
+            if (result && typeof result === 'object' && 'status' in result) {
+                const txResult = result as { status: { SuccessValue?: string } };
+                if (txResult.status?.SuccessValue) {
+                    const decoded = atob(txResult.status.SuccessValue);
+                    return JSON.parse(decoded);
+                }
+            }
+
+            return null;
+        } catch (error) {
+            console.error("reveal_payload failed:", error);
+            throw error;
+        } finally {
+            setIsTransactionPending(false);
+        }
+    }, [accountId, selector]);
 
     const updateBeneficiary = useCallback(async (newBeneficiary: string) => {
         await callMethod("update_beneficiary", { new_beneficiary: newBeneficiary });
@@ -454,6 +516,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
         deposit,
         withdraw,
         setupVault,
+        revealPayload,
         updateBeneficiary,
         updateInterval,
         updateGracePeriod,
