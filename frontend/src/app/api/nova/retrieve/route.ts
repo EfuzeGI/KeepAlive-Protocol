@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const isMainnet = process.env.NEXT_PUBLIC_NETWORK_ID === "mainnet";
 const GROUP_NAME = "sentinel-final-v1";
 
 export async function POST(request: Request) {
@@ -14,9 +13,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing cid field" }, { status: 400 });
         }
 
-        if (!isMainnet) {
-            return NextResponse.json({ error: "Mainnet only" }, { status: 403 });
-        }
+
 
         // ─── REAL MODE (Mainnet) ───
         const accountId = process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID;
