@@ -1,29 +1,21 @@
 /**
  * NEAR Contract Configuration
  * 
- * Configure these values in .env.local
+ * HARDCODED FOR MAINNET RELEASE
  */
 
 // Network configuration
-export const NETWORK_ID = process.env.NEXT_PUBLIC_NETWORK_ID || "mainnet";
+export const NETWORK_ID = "mainnet";
 
-// Contract ID - from env
-export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "keepalive.near";
+// Contract ID
+export const CONTRACT_ID = "keepalive.near";
 
-// RPC URL - strictly from env with fallback
-export const NODE_URL = process.env.NEXT_PUBLIC_NODE_URL || "https://rpc.mainnet.near.org";
+// RPC URL
+export const NODE_URL = "https://rpc.mainnet.near.org";
 
-export const WALLET_URL = NETWORK_ID === "mainnet"
-    ? "https://wallet.near.org"
-    : "https://wallet.testnet.near.org";
-
-export const HELPER_URL = NETWORK_ID === "mainnet"
-    ? "https://helper.mainnet.near.org"
-    : "https://helper.testnet.near.org";
-
-export const EXPLORER_URL = NETWORK_ID === "mainnet"
-    ? "https://explorer.near.org"
-    : "https://explorer.testnet.near.org";
+export const WALLET_URL = "https://wallet.near.org";
+export const HELPER_URL = "https://helper.mainnet.near.org";
+export const EXPLORER_URL = "https://explorer.near.org";
 
 // Time constants (in milliseconds)
 export const TIME_CONSTANTS = {
