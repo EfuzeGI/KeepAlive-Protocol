@@ -5,13 +5,13 @@
  */
 
 // Network configuration
-export const NETWORK_ID = process.env.NEXT_PUBLIC_NETWORK_ID || "testnet";
+export const NETWORK_ID = process.env.NEXT_PUBLIC_NETWORK_ID || "mainnet";
 
 // Contract ID - from env
-export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "sentinel-demo-2026.testnet";
+export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "keepalive.near";
 
 // RPC URL - strictly from env with fallback
-export const NODE_URL = process.env.NEXT_PUBLIC_NODE_URL || "https://testnet.rpc.fastnear.com";
+export const NODE_URL = process.env.NEXT_PUBLIC_NODE_URL || "https://rpc.mainnet.near.org";
 
 export const WALLET_URL = NETWORK_ID === "mainnet"
     ? "https://wallet.near.org"
