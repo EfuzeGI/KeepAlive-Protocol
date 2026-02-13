@@ -5,6 +5,12 @@ import { setupWalletSelector, WalletSelector } from "@near-wallet-selector/core"
 import { setupModal, WalletSelectorModal } from "@near-wallet-selector/modal-ui";
 import { setupMyNearWallet } from "@near-wallet-selector/my-near-wallet";
 import { setupHereWallet } from "@near-wallet-selector/here-wallet";
+import { setupSender } from "@near-wallet-selector/sender";
+import { setupMeteorWallet } from "@near-wallet-selector/meteor-wallet";
+import { setupBitteWallet } from "@near-wallet-selector/bitte-wallet";
+import { setupLedger } from "@near-wallet-selector/ledger";
+import { setupNightly } from "@near-wallet-selector/nightly";
+import { setupWalletConnect } from "@near-wallet-selector/wallet-connect";
 import { actionCreators } from "@near-js/transactions";
 import { CONTRACT_ID, NETWORK_ID } from "@/config/near";
 import "@near-wallet-selector/modal-ui/styles.css";
@@ -219,8 +225,24 @@ export function NearProvider({ children }: { children: ReactNode }) {
                 const _selector = await setupWalletSelector({
                     network: NETWORK_ID as "testnet" | "mainnet",
                     modules: [
-                        setupMyNearWallet(),
+                        setupMyNearWallet({
+                            walletUrl: NETWORK_ID === "mainnet" ? "https://app.mynearwallet.com" : "https://testnet.mynearwallet.com",
+                        }),
                         setupHereWallet(),
+                        setupSender(),
+                        setupMeteorWallet(),
+                        setupBitteWallet(),
+                        setupNightly(),
+                        setupLedger(),
+                        setupWalletConnect({
+                            projectId: "8d944c2069002f5ad9c5204686a34e0e", // Standard project ID
+                            metadata: {
+                                name: "Sentinel Protocol",
+                                description: "Dead Man's Switch for NEAR Protocol",
+                                url: "https://keep-alive-protocol.netlify.app",
+                                icons: ["https://keep-alive-protocol.netlify.app/logo.png"],
+                            },
+                        }),
                     ],
                 });
 
