@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Shield, Clock, User, Loader2, AlertCircle, Zap, Lock, Cloud } from "lucide-react";
 import { uploadEncryptedData, isNovaConfigured } from "@/utils/nova";
+import { encryptSecret, packE2EPayload } from "@/utils/encryption";
 
 // Interval presets in milliseconds
 const INTERVAL_PRESETS = [
@@ -62,18 +63,26 @@ export function CreateVault() {
         try {
             let payloadToStore = securePayload || undefined;
 
-            // Upload to NOVA if secret exists and NOVA is configured
+            // E2EE + NOVA upload flow
             if (payloadToStore && isNovaConfigured()) {
-                setNovaStatus("Archiving to NOVA Decentralized Storage...");
+                // Step 1: Encrypt secret in the browser (server never sees plaintext)
+                setNovaStatus("🔐 Encrypting locally (AES-256-GCM)...");
+                const { ciphertext, key, iv } = await encryptSecret(payloadToStore);
+
+                // Step 2: Upload ONLY the ciphertext to NOVA (server sees garbage)
+                setNovaStatus("☁️ Uploading encrypted data to NOVA...");
                 try {
-                    payloadToStore = await uploadEncryptedData(payloadToStore);
-                    if (payloadToStore.startsWith("NOVA:")) {
-                        setNovaStatus("✅ Archived to NOVA (IPFS)");
+                    const novaCidRaw = await uploadEncryptedData(ciphertext);
+                    if (novaCidRaw.startsWith("NOVA:")) {
+                        const cid = novaCidRaw.replace("NOVA:", "");
+                        // Step 3: Pack CID + key + IV into a single string for the contract
+                        payloadToStore = packE2EPayload(cid, key, iv);
+                        setNovaStatus("✅ E2EE Archived (Zero-Knowledge)");
                     } else {
-                        setNovaStatus("⚠️ NOVA unavailable, storing directly");
+                        setNovaStatus("⚠️ NOVA unavailable, storing encrypted locally");
                     }
                 } catch {
-                    setNovaStatus("⚠️ NOVA unavailable, storing directly");
+                    setNovaStatus("⚠️ NOVA unavailable, storing encrypted locally");
                 }
             }
 

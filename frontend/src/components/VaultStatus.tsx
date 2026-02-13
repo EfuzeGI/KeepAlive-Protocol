@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { retrieveEncryptedData } from "@/utils/nova";
+import { decryptSecret, unpackE2EPayload } from "@/utils/encryption";
 
 export function VaultStatus() {
     const { vaultStatus, accountId, isConnected, revealPayload, isTransactionPending, triggerWarning, checkPulse, resumePulse } = useNear();
@@ -285,8 +286,15 @@ export function VaultStatus() {
                                         try {
                                             const rawPayload = await revealPayload();
                                             if (rawPayload) {
-                                                // Handle NOVA-stored payloads
-                                                if (rawPayload.startsWith("NOVA:")) {
+                                                // Handle E2E encrypted payloads (new format)
+                                                const e2e = unpackE2EPayload(rawPayload);
+                                                if (e2e) {
+                                                    const ciphertext = await retrieveEncryptedData(`NOVA:${e2e.cid}`);
+                                                    const plaintext = await decryptSecret(ciphertext, e2e.key, e2e.iv);
+                                                    setRevealedSecret(plaintext);
+                                                }
+                                                // Legacy NOVA payload
+                                                else if (rawPayload.startsWith("NOVA:")) {
                                                     const decrypted = await retrieveEncryptedData(rawPayload);
                                                     setRevealedSecret(decrypted);
                                                 } else {

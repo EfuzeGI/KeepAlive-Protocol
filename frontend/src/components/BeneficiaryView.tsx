@@ -20,6 +20,7 @@ import {
     Cloud
 } from "lucide-react";
 import { retrieveEncryptedData } from "@/utils/nova";
+import { decryptSecret, unpackE2EPayload } from "@/utils/encryption";
 
 export function BeneficiaryView() {
     const { revealPayload, isTransactionPending } = useNear();
@@ -50,8 +51,18 @@ export function BeneficiaryView() {
         try {
             const rawPayload = await revealPayload(ownerAccountId.trim());
             if (rawPayload) {
-                // Check if payload is stored on NOVA
-                if (rawPayload.startsWith("NOVA:")) {
+                // Check for E2E encrypted payload (new format)
+                const e2e = unpackE2EPayload(rawPayload);
+                if (e2e) {
+                    setNovaStatus("🔐 E2E payload detected. Fetching from NOVA...");
+                    const ciphertext = await retrieveEncryptedData(`NOVA:${e2e.cid}`);
+                    setNovaStatus("🔓 Decrypting locally (AES-256-GCM)...");
+                    const plaintext = await decryptSecret(ciphertext, e2e.key, e2e.iv);
+                    setRevealedSecret(plaintext);
+                    setNovaStatus("✅ Decrypted (Zero-Knowledge E2EE)");
+                }
+                // Legacy NOVA payload (no client-side encryption)
+                else if (rawPayload.startsWith("NOVA:")) {
                     setNovaStatus("Retrieving from NOVA Decentralized Storage...");
                     try {
                         const decrypted = await retrieveEncryptedData(rawPayload);
@@ -62,6 +73,7 @@ export function BeneficiaryView() {
                         setNovaStatus(null);
                     }
                 } else {
+                    // Raw payload (no NOVA)
                     setRevealedSecret(rawPayload);
                 }
             } else {

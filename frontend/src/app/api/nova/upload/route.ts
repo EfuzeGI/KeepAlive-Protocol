@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const GROUP_NAME = "sentinel_fdn_v1";
+const GROUP_NAME = "sentinel_storage_v1";
 
 export async function POST(request: Request) {
     try {
@@ -30,11 +30,16 @@ export async function POST(request: Request) {
             contractId: "nova-sdk.near",
         });
 
-        // Register group (ignore if exists)
+        // Register group (ignore ONLY if strictly "already exists")
         try {
             await sdk.registerGroup(GROUP_NAME);
-        } catch {
-            // Group already exists — OK
+        } catch (err: any) {
+            const msg = err.message || "";
+            // If error is NOT about pre-existence, we must fail because upload will fail too
+            if (!msg.toLowerCase().includes("exist") && !msg.toLowerCase().includes("duplicate")) {
+                console.error("NOVA Register Group Failed:", msg);
+                throw new Error(`Failed to register storage group: ${msg}`);
+            }
         }
 
         const rawBuffer = Buffer.from(data, "utf-8");
