@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
     const accountId = "keep-alive.nova-sdk.near";
-    const apiKey = "nova_sk_XvJ7poWarK1zM3IahbchJCpfdEGdu6bf";
+    const apiKey = "nova_sk_XvJ7poWarKlzM3IahbchJCpfdEGdu6bf";
 
     console.log("🔍 NOVA Diagnostic: testing auth for", accountId);
 
