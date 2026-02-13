@@ -15,13 +15,9 @@ export async function GET() {
             networkId: "mainnet",
         });
 
-        // Test auth by registering groups or just checking if constructor works
-        // (The SDK usually only pings on first actual action)
-        try {
-            await sdk.registerGroup("health-check-" + Date.now());
-        } catch (e) {
-            // If it's a "Group exists" error, that's fine. If it's auth, we'll see.
-        }
+        // Test auth by registering groups
+        // This is critical: if it fails, we need to know WHY.
+        await sdk.registerGroup("health-check-" + Date.now());
 
         return NextResponse.json({
             status: "ok",
