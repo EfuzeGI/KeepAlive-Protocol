@@ -68,8 +68,5 @@ export async function retrieveEncryptedData(payload: string): Promise<string> {
  * so we do a quick health check).
  */
 export function isNovaConfigured(): boolean {
-    return !!(
-        process.env.NEXT_PUBLIC_NOVA_ACCOUNT_ID &&
-        process.env.NEXT_PUBLIC_NOVA_API_KEY
-    );
+    return true; // Hardcoded for Mainnet production
 }
