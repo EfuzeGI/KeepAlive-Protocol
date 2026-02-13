@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { NovaSdk } from "nova-sdk-js";
 
 export const runtime = "nodejs";
 
@@ -6,13 +7,13 @@ export async function GET() {
     const accountId = "keep-alive.nova-sdk.near";
     const apiKey = "nova_sk_XvJ7poWarK1zM3IahbchJCpfdEGdu6bf";
 
+    console.log("🔍 NOVA Diagnostic: testing auth for", accountId);
+
     try {
-        const { NovaSdk } = require("nova-sdk-js");
         const sdk = new NovaSdk(accountId, {
             apiKey,
             rpcUrl: "https://rpc.mainnet.near.org",
             contractId: "nova-sdk.near",
-            networkId: "mainnet",
         });
 
         // Test auth by registering groups

@@ -28,7 +28,6 @@ export async function POST(request: Request) {
             apiKey,
             rpcUrl: "https://rpc.mainnet.near.org",
             contractId: "nova-sdk.near",
-            networkId: "mainnet",
         });
 
         const result = await sdk.retrieve(GROUP_NAME, cid);
