@@ -76,7 +76,7 @@ interface NearContextType {
     updateInterval: (newIntervalMs: number) => Promise<void>;
     updateGracePeriod: (newGracePeriodMs: number) => Promise<void>;
     resetVault: () => Promise<void>;
-    refreshStatus: () => Promise<void>;
+    refreshStatus: (silent?: boolean) => Promise<void>;
 }
 
 const NearContext = createContext<NearContextType | null>(null);
