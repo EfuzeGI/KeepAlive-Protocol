@@ -31,27 +31,24 @@ export default function Home() {
     return () => window.removeEventListener("sentinel:navigate", handler);
   }, [hasVault]);
 
-  // Auto-navigate when connection/vault state changes
+  // Auto-navigate ONLY on initial connection or when on protocol page
   useEffect(() => {
-    if (isConnected && hasVault && activeTab === "protocol") {
-      setActiveTab("dashboard");
-    }
-    if (isConnected && !hasVault && activeTab === "protocol") {
-      setActiveTab("create");
+    if (isConnected && activeTab === "protocol") {
+      setActiveTab(hasVault ? "dashboard" : "create");
     }
   }, [isConnected, hasVault]);
 
-  // Redirect if viewing a tab that requires auth/vault
+  // Redirect if viewing a tab that requires auth
   useEffect(() => {
     if (!isConnected && (activeTab === "dashboard" || activeTab === "create" || activeTab === "access")) {
       setActiveTab("protocol");
     }
-    if (activeTab === "dashboard" && !hasVault) {
+    // Only redirect AWAY from dashboard if user loses vault
+    if (activeTab === "dashboard" && !hasVault && isConnected) {
       setActiveTab("create");
     }
-    if (activeTab === "create" && hasVault) {
-      setActiveTab("dashboard");
-    }
+    // We REMOVE the redirect AWAY from 'create' if user has vault
+    // This allows user to see 'BeneficiaryView' below 'CreateVault'
   }, [isConnected, hasVault, activeTab]);
 
   const showLoading = isConnected && (isLoading || (isSyncing && !vaultStatus));

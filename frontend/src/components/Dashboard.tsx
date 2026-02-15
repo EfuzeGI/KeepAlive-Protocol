@@ -270,6 +270,10 @@ export function Dashboard() {
                     <span className="text-[13px] font-mono text-[var(--text-muted)] tracking-widest uppercase">
                         Switch Status: <span style={{ color: statusColor }}>{switchStatus}</span>
                     </span>
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 border border-[var(--accent)]/20 bg-[var(--accent-dim)] rounded-full ml-4">
+                        <Shield className="w-2.5 h-2.5 text-[var(--accent)]" />
+                        <span className="text-[9px] font-mono text-[var(--accent)] font-bold tracking-tight uppercase">Vault Owner</span>
+                    </div>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
@@ -386,9 +390,9 @@ export function Dashboard() {
                     {/* Details */}
                     <div className="border border-[var(--border)] bg-[var(--surface)] animate-reveal delay-3">
                         {[
-                            { icon: Clock, label: "Interval", value: formatDuration(vaultStatus.heartbeat_interval_ms), color: "var(--text)" },
+                            { icon: Clock, label: "Heartbeat Interval", value: formatDuration(vaultStatus.heartbeat_interval_ms), color: "var(--text)" },
                             { icon: Shield, label: "Grace Period", value: formatDuration(vaultStatus.grace_period_ms), color: "var(--amber)" },
-                            { icon: Users, label: "Beneficiary", value: vaultStatus.beneficiary_id, color: "var(--text)" },
+                            { icon: Users, label: "Assigned Beneficiary", value: vaultStatus.beneficiary_id, color: "var(--text)" },
                         ].map((item, i) => (
                             <div key={i} className={`flex items-center justify-between px-6 py-4 ${i > 0 ? "border-t border-[var(--border)]" : ""}`}>
                                 <div className="flex items-center gap-3">

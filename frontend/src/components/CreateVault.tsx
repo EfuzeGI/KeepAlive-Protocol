@@ -64,41 +64,40 @@ export function CreateVault() {
     const [secretPayload, setSecretPayload] = useState("");
     const [useCustomInterval, setUseCustomInterval] = useState(false);
     const [useCustomGrace, setUseCustomGrace] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const telegramConnected = vaultStatus?.telegram_chat_id && vaultStatus.telegram_chat_id !== "";
 
-
-
     const encryptAndSubmit = async () => {
-        if (!beneficiary.trim()) return;
+        if (!beneficiary.trim()) {
+            setError("Beneficiary address is required");
+            return;
+        }
+        if (!secretPayload.trim()) {
+            setError("Secret payload is required");
+            return;
+        }
 
-        let encryptedPayload: string | undefined;
+        setError(null);
+        setIsSubmitting(true);
 
-        if (secretPayload.trim()) {
-            try {
+        try {
+            let encryptedPayload: string | undefined;
+
+            if (secretPayload.trim()) {
                 // 1. Encrypt locally
                 const { ciphertext, key, iv } = await encryptSecret(secretPayload);
 
                 // 2. Upload to NOVA (IPFS)
-                // The prefix "NOVA:" is added by uploadEncryptedData, but packE2EPayload expects just the CID usually?
-                // Let's check uploadEncryptedData return type. It returns "NOVA:<cid>".
-                // packE2EPayload in encryption.ts does: `E2E:NOVA:${cid}|...`
-                // So we need to strip the prefix from uploadEncryptedData or adjust.
-
                 const novaString = await uploadEncryptedData(ciphertext);
                 const cid = novaString.replace("NOVA:", "");
 
                 // 3. Pack metadata
                 encryptedPayload = packE2EPayload(cid, key, iv);
-            } catch (err) {
-                console.error("Encryption/Upload failed:", err);
-                // Fallback or alert? For now, we log errors. User said "Nova must not fail". 
-                // We should probably rethrow or show UI error if we could, but adhering to current void return.
-                return;
             }
-        }
 
-        try {
+            // 4. Submit to NEAR
             await setupVault(
                 beneficiary.trim(),
                 intervalMs,
@@ -106,23 +105,27 @@ export function CreateVault() {
                 encryptedPayload
             );
 
-            // 4. Auto-register with Monitoring Agent
+            // 5. Auto-register with Monitoring Agent
             try {
-                const AGENT_API = "http://localhost:3001";
-                await fetch(`${AGENT_API}/register-vault`, {
+                // Use a relative path or the production URL for the agent if known
+                // Since this is a browser app, it should talk to the API
+                await fetch(`/api/agent/register-vault`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ wallet_id: accountId }),
                 });
-                console.log("✅ Registered with monitoring agent");
             } catch (e) {
-                console.warn("⚠️ Monitoring agent registration failed (backend offline?):", e);
+                console.warn("⚠️ Agent registration failed:", e);
             }
         } catch (err) {
             console.error("Vault setup failed:", err);
-            throw err;
+            setError(err instanceof Error ? err.message : "Failed to initialize vault");
+        } finally {
+            setIsSubmitting(false);
         }
     };
+
+    const isReady = beneficiary.trim() && secretPayload.trim();
 
     return (
         <div className="max-w-[680px] mx-auto px-6 py-14">
@@ -140,7 +143,7 @@ export function CreateVault() {
                     <input
                         type="text"
                         value={beneficiary}
-                        onChange={e => setBeneficiary(e.target.value)}
+                        onChange={e => { setBeneficiary(e.target.value); setError(null); }}
                         placeholder="receiver.near"
                         className="w-full bg-[var(--bg)] border border-[var(--border)] px-4 py-3.5 text-[14px] font-mono text-[var(--text)] placeholder:text-[var(--text-dim)] focus:outline-none focus:border-[var(--border-hover)]"
                     />
@@ -251,7 +254,7 @@ export function CreateVault() {
                                     className={`flex-1 py-2.5 text-[13px] font-mono transition-colors ${graceMs === item.ms
                                         ? "bg-[var(--amber)] text-white font-semibold"
                                         : "text-[var(--text-muted)] hover:text-[var(--text)]"
-                                        } ${i > 0 ? "border-l border-[var(--border)]" : ""}`}
+                                        } ${i > 0 ? "border-l border(--border)]" : ""}`}
                                 >
                                     {item.label}
                                 </button>
@@ -272,7 +275,7 @@ export function CreateVault() {
                     </div>
                     <textarea
                         value={secretPayload}
-                        onChange={e => setSecretPayload(e.target.value)}
+                        onChange={e => { setSecretPayload(e.target.value); setError(null); }}
                         rows={3}
                         placeholder="Enter seed phrases, private notes, or coordinates here. Encrypted locally before it ever leaves your browser."
                         className="w-full bg-[var(--bg)] border border-[var(--border)] px-4 py-3.5 text-[13px] font-mono text-[var(--text)] placeholder:text-[var(--text-dim)] focus:outline-none focus:border-[var(--border-hover)] resize-none"
@@ -325,15 +328,26 @@ export function CreateVault() {
                 <div className="p-7">
                     <button
                         onClick={encryptAndSubmit}
-                        disabled={!beneficiary.trim() || isTransactionPending}
-                        className="w-full py-4 bg-[var(--text)] text-black text-[15px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-30 flex items-center justify-center gap-2"
+                        disabled={!isReady || isTransactionPending || isSubmitting}
+                        className={`w-full py-4 text-[15px] font-semibold transition-all flex items-center justify-center gap-2 ${isReady && !isTransactionPending && !isSubmitting
+                            ? "bg-[var(--text)] text-black hover:opacity-90 grayscale-0"
+                            : "bg-[var(--border)] text-[var(--text-dim)] cursor-not-allowed grayscale"
+                            }`}
                     >
-                        {isTransactionPending ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                        {isTransactionPending || isSubmitting ? (
+                            <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                {isSubmitting ? "Encrypting..." : "Signing..."}
+                            </>
                         ) : (
                             <>Initialize Vault</>
                         )}
                     </button>
+                    {error && (
+                        <p className="mt-3 text-[11px] font-mono text-red-500 text-center animate-shake">
+                            {error}
+                        </p>
+                    )}
                 </div>
             </div>
         </div>
