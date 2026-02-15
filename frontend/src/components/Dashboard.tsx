@@ -131,29 +131,32 @@ export function Dashboard() {
             ]) as string | null;
 
             if (payload) {
-                let decryptedResult = payload;
+                // Ensure payload is a clean string (remove quotes if any)
+                const cleanPayload = payload.trim().replace(/^"|"$/g, '');
+
+                let decryptedResult = cleanPayload;
                 let decryptError = "";
 
                 // 1. Try Local Payload
-                const localPack = unpackE2ELocalPayload(payload);
+                const localPack = unpackE2ELocalPayload(cleanPayload);
                 if (localPack) {
                     try {
                         decryptedResult = await decryptSecret(localPack.ciphertext, localPack.key, localPack.iv);
                     } catch (e) {
                         console.error("Local decryption failed:", e);
-                        decryptError = "Decryption failed. Showing raw metadata.";
+                        decryptError = "Local decryption error. Check your key/IV.";
                     }
                 }
                 // 2. Try Nova Payload
                 else {
-                    const novaPack = unpackE2EPayload(payload);
+                    const novaPack = unpackE2EPayload(cleanPayload);
                     if (novaPack) {
                         try {
                             const ciphertext = await retrieveEncryptedData(`NOVA:${novaPack.cid}`);
                             decryptedResult = await decryptSecret(ciphertext, novaPack.key, novaPack.iv);
                         } catch (e) {
                             console.error("Nova retrieval/decryption failed:", e);
-                            decryptError = "Failed to retrieve from Nova/IPFS. Using metadata.";
+                            decryptError = e instanceof Error ? e.message : "Nova retrieval failed.";
                         }
                     }
                 }
@@ -164,7 +167,10 @@ export function Dashboard() {
 
                 // Cache in session storage
                 if (accountId) {
-                    sessionStorage.setItem(`revealed_${accountId}`, decryptedResult);
+                    sessionStorage.setItem(`revealed_${accountId}`, JSON.stringify({
+                        secret: decryptedResult,
+                        error: decryptError
+                    }));
                 }
             } else {
                 throw new Error("Unable to decrypt payload. You may not be authorized.");
@@ -182,8 +188,14 @@ export function Dashboard() {
         if (accountId && typeof window !== "undefined") {
             const cached = sessionStorage.getItem(`revealed_${accountId}`);
             if (cached) {
-                setRevealedSecret(cached);
-                setShowSecret(true);
+                try {
+                    const { secret, error } = JSON.parse(cached);
+                    setRevealedSecret(secret);
+                    if (error) setRevealError(error);
+                    setShowSecret(true);
+                } catch (e) {
+                    // Ignore corrupted cache
+                }
             }
         }
     }, [accountId]);
@@ -246,11 +258,6 @@ export function Dashboard() {
                     <span className="text-[13px] font-mono text-[var(--text-muted)] tracking-widest uppercase">
                         Switch Status: <span style={{ color: statusColor }}>{switchStatus}</span>
                     </span>
-                    {!vaultStatus.is_emergency && !vaultStatus.is_yielding && !vaultStatus.is_completed && (
-                        <span className="text-[10px] font-mono text-[var(--text-dim)] border border-[var(--border)] px-1.5 py-0.5 ml-2">
-                            PROTECTING
-                        </span>
-                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     <button
@@ -273,18 +280,6 @@ export function Dashboard() {
                     </button>
                 </div>
             </div>
-
-            {/* Beneficiary Guide */}
-            {!vaultStatus.is_completed && (
-                <div className="mb-6 p-3 border border-[var(--accent)]/20 bg-[var(--accent)]/5 rounded-sm flex items-center gap-3">
-                    <div className="p-1.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">
-                        <Eye className="w-3 h-3" />
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)]">
-                        Viewing your own vault. Expected an inherited secret? Use the <button onClick={() => window.location.hash = "#access"} className="text-[var(--accent)] hover:underline">Access</button> tab to enter the owner&#39;s ID.
-                    </p>
-                </div>
-            )}
 
             <div className="grid lg:grid-cols-[1fr_380px] gap-5">
                 {/* Left: Timer Block */}
@@ -409,7 +404,7 @@ export function Dashboard() {
                                 {revealedSecret}
                             </div>
                         ) : (
-                            <div className="space-y-3">
+                            <div className="flex flex-col gap-2">
                                 <button
                                     onClick={handleReveal}
                                     disabled={secretLoading}
@@ -425,7 +420,7 @@ export function Dashboard() {
                                     )}
                                 </button>
                                 {revealError && (
-                                    <p className="text-[11px] text-red-400 text-center animate-in fade-in slide-in-from-top-1">
+                                    <p className="text-[10px] text-red-500 font-mono text-center animate-shake">
                                         {revealError}
                                     </p>
                                 )}

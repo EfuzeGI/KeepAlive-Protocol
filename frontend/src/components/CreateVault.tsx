@@ -84,12 +84,30 @@ export function CreateVault() {
             }
         }
 
-        await setupVault(
-            beneficiary.trim(),
-            intervalMs,
-            graceMs,
-            encryptedPayload
-        );
+        try {
+            await setupVault(
+                beneficiary.trim(),
+                intervalMs,
+                graceMs,
+                encryptedPayload
+            );
+
+            // 4. Auto-register with Monitoring Agent
+            try {
+                const AGENT_API = "http://localhost:3001";
+                await fetch(`${AGENT_API}/register-vault`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ wallet_id: accountId }),
+                });
+                console.log("✅ Registered with monitoring agent");
+            } catch (e) {
+                console.warn("⚠️ Monitoring agent registration failed (backend offline?):", e);
+            }
+        } catch (err) {
+            console.error("Vault setup failed:", err);
+            throw err;
+        }
     };
 
     return (

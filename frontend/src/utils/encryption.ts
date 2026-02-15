@@ -101,9 +101,10 @@ export function unpackE2EPayload(payload: string): {
     key: string;
     iv: string;
 } | null {
-    if (!payload.startsWith("E2E:NOVA:")) return null;
+    const clean = payload.trim().replace(/^"|"$/g, '');
+    if (!clean.startsWith("E2E:NOVA:")) return null;
 
-    const stripped = payload.replace("E2E:NOVA:", "");
+    const stripped = clean.replace("E2E:NOVA:", "");
     const parts = stripped.split("|");
 
     const cidPart = parts[0]; // raw CID (no prefix)
