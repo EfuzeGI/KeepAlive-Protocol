@@ -4,8 +4,8 @@
     "description": "Dead Man's Switch Smart Contract for NEAR Protocol",
     "main": "src/contract.ts",
     "scripts": {
-        "build": "near-sdk-js build src/contract.ts build/sentinel_vault.wasm",
-        "deploy": "near deploy --accountId $CONTRACT_ID --wasmFile build/sentinel_vault.wasm"
+        "build": "npx near-sdk-js build src/contract.ts build/keepalive_vault.wasm",
+        "deploy": "near deploy --accountId $CONTRACT_ID --wasmFile build/keepalive_vault.wasm"
     },
     "keywords": [
         "near",

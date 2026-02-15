@@ -31,7 +31,7 @@ export function AboutPage() {
                 <p className="text-[10px] font-mono text-[var(--text-dim)] tracking-widest uppercase mb-5">Links</p>
                 <div className="space-y-1">
                     {[
-                        { icon: Github, label: "GitHub Repository", url: "https://github.com/EfuzeGI/Sentinel-Project" },
+                        { icon: Github, label: "GitHub Repository", url: "https://github.com/EfuzeGI/KeepAlive-Protocol" },
                         { icon: Globe, label: "Smart Contract on NearBlocks", url: "https://nearblocks.io/address/keepalive.near" },
                         { icon: BookOpen, label: "NOVA SDK Documentation", url: "https://nova-sdk.com" },
                         { icon: Send, label: "Telegram Bot (@keepalive_near_bot)", url: "https://t.me/keepalive_near_bot" },

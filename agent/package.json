@@ -1,5 +1,5 @@
 {
-  "name": "sentinel-agent",
+  "name": "keepalive-agent",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",

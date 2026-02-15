@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ═══════════════════════════════════════════════════════════════════
-//   Sentinel Protocol: Multi-Vault Monitoring Agent
+//   KeepAlive Protocol: Multi-Vault Monitoring Agent
 // ═══════════════════════════════════════════════════════════════════
 
 const RPC_ENDPOINTS = [
@@ -467,9 +467,9 @@ function startHttpApi() {
     });
 }
 
-// Initialize Telegram bot
-let bot = null;
-
+// ═══════════════════════════════════════════════════════════════════
+//  KeepAlive Bot - Multi-Wallet Monitoring
+// ═══════════════════════════════════════════════════════════════════
 function initTelegramBot() {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
@@ -507,7 +507,7 @@ function initTelegramBot() {
         if (!accountId.endsWith('.testnet') && !accountId.endsWith('.near')) {
             bot.sendMessage(msg.chat.id,
                 '❌ Invalid wallet format.\n\n' +
-                'Use the button on the Sentinel dashboard.',
+                'Use the button on the KeepAlive dashboard.',
                 { parse_mode: 'Markdown' }
             );
             return;
@@ -547,7 +547,7 @@ function initTelegramBot() {
             `• Warning shot is fired\n` +
             `• Transfer is initiated\n\n` +
             `📊 Currently watching: *${subscribers[chatId].length} wallet(s)*\n\n` +
-            `👉 [Open Dashboard](https://keep-alive-protocol.netlify.app)`,
+            `👉 [Open Dashboard](https://keepalive-fdn.netlify.app)`,
             { parse_mode: 'Markdown' }
         );
     });
@@ -564,7 +564,7 @@ function initTelegramBot() {
                 `📊 *Your Watchlist*\n\n` +
                 `${walletList}\n\n` +
                 `_To remove:_ /unlink wallet.testnet\n\n` +
-                `👉 [Open Dashboard](https://keep-alive-protocol.netlify.app)`,
+                `👉 [Open Dashboard](https://keepalive-fdn.netlify.app)`,
                 { parse_mode: 'Markdown' }
             );
         } else {
@@ -699,7 +699,7 @@ async function sendTelegramAlert(targetWalletId, message, vaultData = null) {
 async function performDigitalLifeCheck(ownerId) {
     console.log();
     log(`${C.bold}╔══════════════════════════════════════════════════╗${C.reset}`, C.magenta);
-    log(`${C.bold}║  SENTINEL - Digital Life Verification            ║${C.reset}`, C.magenta);
+    log(`${C.bold}║  KEEPALIVE - Digital Life Verification           ║${C.reset}`, C.magenta);
     log(`${C.bold}╚══════════════════════════════════════════════════╝${C.reset}`, C.magenta);
     console.log();
 

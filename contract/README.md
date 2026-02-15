@@ -1,6 +1,6 @@
-# Sentinel Contract
+# KeepAlive Contract
 
-NEAR smart contract for Dead Man's Switch.
+NEAR smart contract for Automated Inheritance.
 
 ## Build
 
@@ -9,12 +9,12 @@ npm install
 npm run build
 ```
 
-Output: `build/sentinel_vault.wasm`
+Output: `build/keepalive_vault.wasm`
 
 ## Deploy
 
 ```bash
-near deploy <account> build/sentinel_vault.wasm
+near deploy <account> build/keepalive_vault.wasm
 near call <contract> setup_vault '{"beneficiary":"bob.testnet","interval":120000}' --accountId <owner>
 ```
 

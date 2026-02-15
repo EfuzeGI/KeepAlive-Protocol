@@ -52,8 +52,8 @@ graph TD
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/EfuzeGI/Sentinel-Project.git
-   cd Sentinel-Project
+   git clone https://github.com/EfuzeGI/KeepAlive-Protocol.git
+   cd KeepAlive-Protocol
    ```
 
 2. **Frontend Setup**

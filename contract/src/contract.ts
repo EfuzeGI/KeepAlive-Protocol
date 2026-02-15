@@ -1,4 +1,4 @@
-// Sentinel - Multi-Vault Dead Man's Switch with Yield/Resume + Warning Protocol
+// KeepAlive Protocol - Multi-Vault Automated Inheritance with Yield/Resume + Warning Protocol
 // Using simple key-value storage to avoid collection serialization issues
 
 import { NearBindgen, near, call, view } from "near-sdk-js";
@@ -32,7 +32,7 @@ interface VaultData {
 }
 
 @NearBindgen({})
-export class SentinelRegistry {
+export class KeepAliveProtocol {
 
   // Helper to get vault using raw storage
   private getVault(accountId: string): VaultData | null {
@@ -466,8 +466,8 @@ export class SentinelRegistry {
 
       const hasPayload = vault.secure_payload ? true : false;
       const memoText = hasPayload
-        ? "⚠️ SENTINEL LEGACY RECEIVED. Encrypted instructions await you. Visit sentinel-app.com and use 'Beneficiary Access' to reveal your secret message."
-        : "⚠️ SENTINEL LEGACY RECEIVED. Dead Man's Switch triggered — funds transferred.";
+        ? "⚠️ KEEPALIVE LEGACY RECEIVED. Encrypted instructions await you. Visit keepalive-fdn.netlify.app and use 'Beneficiary Access' to reveal your secret message."
+        : "⚠️ KEEPALIVE LEGACY RECEIVED. Automated Inheritance triggered — funds transferred.";
 
       near.log(`MEMO: ${memoText}`);
       near.log(`EVENT_JSON:{"event": "transfer_complete", "data": {"owner": "${account_id}", "beneficiary": "${vault.beneficiary_id}", "amount": "${balance.toString()}", "has_payload": ${hasPayload}, "memo": "${memoText}"}}`);
