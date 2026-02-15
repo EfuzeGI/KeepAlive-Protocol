@@ -24,9 +24,9 @@ const RPC_ENDPOINTS = [
 
 const cfg = {
     networkId: process.env.NETWORK_ID || 'mainnet',
-    contractId: process.env.CONTRACT_ID || 'testbruh.testnet',
-    agentId: process.env.AGENT_ACCOUNT_ID || 'testbruh.testnet',
-    agentKey: process.env.AGENT_PRIVATE_KEY,
+    contractId: (process.env.CONTRACT_ID || 'testbruh.testnet').trim(),
+    agentId: (process.env.AGENT_ACCOUNT_ID || 'testbruh.testnet').trim(),
+    agentKey: process.env.AGENT_PRIVATE_KEY ? process.env.AGENT_PRIVATE_KEY.trim() : undefined,
     pollInterval: 30_000, // Check every 30 seconds (less aggressive)
     rpcTimeout: 30_000, // 30 seconds - public testnet RPCs are slow
     warningAmount: '10000000000000000000', // 0.00001 NEAR
@@ -405,7 +405,7 @@ function getAllWatchedWallets() {
 // ═══════════════════════════════════════════════════════════════════
 
 function startHttpApi() {
-    const PORT = process.env.AGENT_API_PORT || 3001;
+    const PORT = process.env.PORT || process.env.AGENT_API_PORT || 3001;
 
     const server = http.createServer((req, res) => {
         // CORS headers
@@ -471,7 +471,7 @@ function startHttpApi() {
 //  KeepAlive Bot - Multi-Wallet Monitoring
 // ═══════════════════════════════════════════════════════════════════
 function initTelegramBot() {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const token = process.env.TELEGRAM_BOT_TOKEN ? process.env.TELEGRAM_BOT_TOKEN.trim() : null;
     if (!token) {
         log('TELEGRAM_BOT_TOKEN not set, Telegram disabled', C.dim);
         return;
