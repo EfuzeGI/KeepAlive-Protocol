@@ -32,10 +32,15 @@ export function Dashboard() {
 
     // Track if we've triggered an auto-refresh for the current zero-state
     const hasRefreshedRef = useRef(false);
+    const zeroPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
     // Reset auto-refresh flag when vault status updates (new cycle)
     useEffect(() => {
         hasRefreshedRef.current = false;
+        if (zeroPollIntervalRef.current) {
+            clearInterval(zeroPollIntervalRef.current);
+            zeroPollIntervalRef.current = null;
+        }
     }, [vaultStatus]);
 
     // Timer countdown
@@ -70,17 +75,31 @@ export function Dashboard() {
             // Active or Warning states imply a countdown. Other states (Expired, Yielding) are terminal/static.
             const isTimerRunning = !vaultStatus.is_expired && !vaultStatus.is_yielding && !vaultStatus.is_emergency && !vaultStatus.is_completed;
 
-            // Auto-refresh when timer hits zero to transition state
+            // Auto-refresh polling when timer hits zero
             if (ms <= 0 && isTimerRunning && !hasRefreshedRef.current && !isSyncing) {
-                console.log("Timer hit zero - auto-refreshing status...");
+                console.log("Timer hit zero - starting auto-refresh poll...");
                 hasRefreshedRef.current = true;
                 refreshStatus();
+
+                // Poll every 2 seconds for 10 seconds to catch the state transition
+                let attempts = 0;
+                zeroPollIntervalRef.current = setInterval(() => {
+                    attempts++;
+                    console.log(`Auto-refresh poll attempt ${attempts}`);
+                    refreshStatus(true); // silent refresh
+                    if (attempts >= 5) {
+                        if (zeroPollIntervalRef.current) clearInterval(zeroPollIntervalRef.current);
+                    }
+                }, 2000);
             }
         };
 
         tick();
         const interval = setInterval(tick, 1000);
-        return () => clearInterval(interval);
+        return () => {
+            clearInterval(interval);
+            if (zeroPollIntervalRef.current) clearInterval(zeroPollIntervalRef.current);
+        };
     }, [vaultStatus, refreshStatus, isSyncing]);
 
     const formatNear = (yocto: string) => {
@@ -102,8 +121,9 @@ export function Dashboard() {
         setRevealError(null);
         try {
             // Race against a timeout to prevent infinite loading
+            // Increased to 120s as user reported timeouts
             const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Wallet interaction timed out")), 60000)
+                setTimeout(() => reject(new Error("Wallet interaction timed out. Please approve the transaction.")), 120000)
             );
 
             const payload = await Promise.race([
@@ -146,8 +166,6 @@ export function Dashboard() {
                 }
                 setShowSecret(true);
             } else {
-                // If null is returned without error (e.g. redirect wallet), we might not reach here due to reload
-                // But if we do, it means no payload was found or unauthorized
                 throw new Error("Unable to decrypt payload. You may not be authorized.");
             }
         } catch (err) {
@@ -168,8 +186,27 @@ export function Dashboard() {
 
     const handleDeposit = async () => {
         if (!depositAmount) return;
-        await deposit(depositAmount);
-        setDepositAmount("");
+        try {
+            await deposit(depositAmount);
+            setDepositAmount("");
+        } catch (e) {
+            console.error("Deposit failed", e);
+        }
+    };
+
+    const [isResetting, setIsResetting] = useState(false);
+
+    const handleReset = async () => {
+        if (!confirm("Are you sure? This will delete your vault and return funds.")) return;
+        setIsResetting(true);
+        try {
+            await resetVault();
+        } catch (e) {
+            console.error("Reset failed:", e);
+            alert("Failed to reset vault. Please try again.");
+        } finally {
+            setIsResetting(false);
+        }
     };
 
     if (!vaultStatus) return null;
@@ -209,13 +246,13 @@ export function Dashboard() {
                         {isSyncing ? "Syncing..." : "Refresh"}
                     </button>
                     <button
-                        onClick={() => resetVault()}
-                        disabled={isTransactionPending}
+                        onClick={handleReset}
+                        disabled={isTransactionPending || isResetting}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono text-red-400/60 hover:text-red-400 border border-red-900/30 hover:border-red-800/50 transition-colors disabled:opacity-30"
                         title="Delete vault and return funds"
                     >
-                        <Trash2 className="w-3 h-3" />
-                        Reset Vault
+                        {isResetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                        {isResetting ? "Resetting..." : "Reset Vault"}
                     </button>
                 </div>
             </div>
