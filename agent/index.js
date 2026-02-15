@@ -496,7 +496,9 @@ function initTelegramBot() {
                 '🛡️ Automated Inheritance for NEAR Protocol\n\n' +
                 '*Commands:*\n' +
                 '• /status - View your watchlist\n' +
+                '• /add `<wallet>` - Add a wallet to watch\n' +
                 '• /unlink `<wallet>` - Remove a wallet\n' +
+                '• /clear - Remove all wallets\n\n' +
                 '• /clear - Remove all wallets\n\n' +
                 `📊 Currently watching: *${wallets.length} wallet(s)*\n\n` +
                 '👉 [Open Dashboard](https://keepalive-fdn.netlify.app)',
@@ -577,6 +579,64 @@ function initTelegramBot() {
                 { parse_mode: 'Markdown' }
             );
         }
+    });
+
+    // Handle /add <wallet> command
+    bot.onText(/\/add(?:\s+(.+))?/, async (msg, match) => {
+        const chatId = String(msg.chat.id);
+        const accountId = match[1]?.trim();
+
+        if (!accountId) {
+            bot.sendMessage(msg.chat.id,
+                `ℹ️ *Usage:* /add wallet.near\n\n` +
+                `Adds a wallet to your watchlist.`,
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        // Validate format
+        if (!accountId.endsWith('.testnet') && !accountId.endsWith('.near')) {
+            bot.sendMessage(msg.chat.id,
+                '❌ Invalid wallet format.\n\n' +
+                'Must end with .near or .testnet',
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        // Add to local watchlist
+        const subscribers = loadSubscribers();
+        if (!subscribers[chatId]) subscribers[chatId] = [];
+
+        if (subscribers[chatId].includes(accountId)) {
+            bot.sendMessage(msg.chat.id,
+                `ℹ️ Already watching \`${accountId}\`\n\n` +
+                `Use /status to view your watchlist.`,
+                { parse_mode: 'Markdown' }
+            );
+            return;
+        }
+
+        subscribers[chatId].push(accountId);
+        saveSubscribers(subscribers);
+
+        // Save telegram_chat_id on-chain
+        try {
+            await callMethod(rpc, 'link_telegram', { account_id: accountId, chat_id: chatId });
+            log(`📱 Linked on-chain: ${accountId} -> chat ${chatId}`, C.green);
+        } catch (e) {
+            log(`Failed to link on-chain (vault may not exist): ${e.message}`, C.yellow);
+        }
+
+        log(`📱 Added to watchlist: ${accountId} -> chat ${chatId}`, C.green);
+
+        bot.sendMessage(msg.chat.id,
+            `✅ *Added to Watchlist!*\n\n` +
+            `🔗 Wallet: \`${accountId}\`\n\n` +
+            `📊 Currently watching: *${subscribers[chatId].length} wallet(s)*`,
+            { parse_mode: 'Markdown' }
+        );
     });
 
     // Handle /unlink <wallet> command
