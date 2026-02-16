@@ -34,6 +34,23 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
 
     const visibleTabs = NAV_ITEMS.filter(item => {
         if (item.requiresAuth && !isConnected) return false;
+
+        // Dashboard: Only visible if you HAVE a vault AND you are the owner
+        if (item.id === 'dashboard') {
+            if (!hasVault) return false;
+            if (vaultStatus?.owner_id && accountId && vaultStatus.owner_id !== accountId) return false;
+            return true;
+        }
+
+        // Create: Only visible if you DON'T have a vault (and are not viewing someone else's)
+        // Actually, if you are a beneficiary, you might want to create your own vault too.
+        // But the requirement is "Beneficiary sees only Access". 
+        // Let's stick to: if you have a vault -> Dashboard (Owner) / Create (Non-Owner).
+        // Wait, if I am a beneficiary (non-owner), I should see "Create" if I don't have my own vault.
+        // If I strictly follow: "Beneficiary... sees only... Access, About" -> 
+        // The user said: "he sees only the page for creating a new vault". 
+        // So: Non-owner -> Sees Create (if no vault) AND Access.
+
         if (item.requiresVault && !hasVault) return false;
         if (item.requiresNoVault && hasVault) return false;
         return true;
@@ -60,8 +77,8 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
                             key={item.id}
                             onClick={() => onTabChange(item.id)}
                             className={`px-4 py-1.5 text-[14px] transition-colors ${activeTab === item.id
-                                    ? "text-[var(--text)] font-medium"
-                                    : "text-[var(--text-muted)] hover:text-[var(--text)]"
+                                ? "text-[var(--text)] font-medium"
+                                : "text-[var(--text-muted)] hover:text-[var(--text)]"
                                 }`}
                         >
                             {item.label}

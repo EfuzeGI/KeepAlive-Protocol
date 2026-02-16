@@ -43,10 +43,32 @@ export default function Home() {
     if (!isConnected && (activeTab === "dashboard" || activeTab === "create" || activeTab === "access")) {
       setActiveTab("protocol");
     }
-    // Only redirect AWAY from dashboard if user loses vault
+
+    // Protect Dashboard: Redirect AWAY if user is not the owner
+    // If they have a vault but accountId != owner_id, they are looking at someone else's vault (e.g. as beneficiary)
+    // they should generally be on Access or Create (if they want their own).
+    // The contract view `get_vault` returns the vault associated with the `account_id` passed to it.
+    // In `NearContext`, we call `get_vault(accountId)`. 
+    // So `vaultStatus` IS the vault where `owner_id === accountId`. 
+    // EXCEPT if the user has NO vault, `vaultStatus` is null.
+    // If `vaultStatus` exists, by definition `owner_id === accountId` because we fetched it using `accountId`.
+    // WAIT. If I am a beneficiary, `get_vault(my_account)` will return NULL (unless I also have my own vault).
+    // So the check `if (activeTab === "dashboard" && !hasVault)` covers it.
+    // If I am a beneficiary without a vault, `hasVault` is false -> redirect to Create.
+    // If I am a beneficiary WITH a vault, `hasVault` is true -> I see MY dashboard.
+    // The user wants: "Beneficiary... sees only... Access". 
+    // This implies: Even if I have a vault, if I logged in as beneficiary?? No.
+    // Scenario: 
+    // 1. Creator (Access: Creator) -> Dashboard (shows Creator's vault).
+    // 2. Beneficiary (Access: Beneficiary) -> 
+    //    If Beneficiary has NO vault -> `hasVault` is false -> Redirect to Create.
+    //    If Beneficiary HAS a vault -> `hasVault` is true -> They see THEIR vault. 
+    //    This is correct behavior.
+
     if (activeTab === "dashboard" && !hasVault && isConnected) {
       setActiveTab("create");
     }
+
     // AUTOMATED REDIRECT AFTER CREATION
     // If the user has a vault and is currently on the 'create' tab, 
     // it means they just finished creating it (or already had one).
@@ -82,14 +104,7 @@ export default function Home() {
         return (
           <div>
             <CreateVault />
-            <div className="max-w-[500px] mx-auto px-6 py-3">
-              <div className="flex items-center gap-4">
-                <div className="flex-1 h-px bg-[var(--border)]" />
-                <span className="text-[var(--text-dim)] text-[10px] font-mono">or check inherited vault</span>
-                <div className="flex-1 h-px bg-[var(--border)]" />
-              </div>
-            </div>
-            <BeneficiaryView />
+            {/* Removed BeneficiaryView from here to reduce confusion. Access tab is for that. */}
           </div>
         );
       case "access":

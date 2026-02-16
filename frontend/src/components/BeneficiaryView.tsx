@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNear } from "@/contexts/NearContext";
 import { Loader2, Eye, Copy, Check } from "lucide-react";
 import { decryptSecret, unpackE2ELocalPayload, unpackE2EPayload } from "@/utils/encryption";
@@ -8,6 +8,36 @@ import { retrieveEncryptedData } from "@/utils/nova";
 
 export function BeneficiaryView() {
     const { revealPayload, isTransactionPending, accountId } = useNear();
+    // Check for redirect result on mount
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        const params = new URLSearchParams(window.location.search);
+        const txHash = params.get("transactionHashes");
+        const errorCode = params.get("errorCode");
+
+        if (errorCode) {
+            setError(`Transaction failed: ${decodeURIComponent(errorCode)}`);
+            // Clean URL
+            window.history.replaceState({}, "", window.location.pathname);
+            return;
+        }
+
+        if (txHash) {
+            setLoading(true);
+            // Give the provider a moment to index the tx
+            setTimeout(() => {
+                // We re-trigger reveal but the provider should pick up the recent tx or we can parse it directly
+                // For simplicity, we just retry the view call which should now succeed if state changed, 
+                // or we rely on the user to click reveal again (which is now safe).
+                // Better yet, let's just clear the loading state and tell them to click again to fetch the result.
+                setLoading(false);
+                setError("Transaction completed. Click 'Reveal Payload' again to decrypt.");
+                window.history.replaceState({}, "", window.location.pathname);
+            }, 1000);
+        }
+    }, []);
+
     const [ownerInput, setOwnerInput] = useState("");
     const [result, setResult] = useState<string | null>(null);
     const [error, setError] = useState("");
@@ -140,6 +170,16 @@ export function BeneficiaryView() {
                             </>
                         )}
                     </button>
+                    {loading && (
+                        <div className="mt-2 text-center">
+                            <button
+                                onClick={() => window.location.reload()}
+                                className="text-[10px] text-[var(--text-dim)] underline hover:text-[var(--text)]"
+                            >
+                                Stuck loading? Check for result
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 
