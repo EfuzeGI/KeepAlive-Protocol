@@ -256,6 +256,9 @@ async function callMethod(rpc, method, args = {}, deposit = '0') {
 // ═══════════════════════════════════════════════════════════════════
 
 async function checkNativeActivity(rpc, accountId) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
     try {
         // Get all access keys for the account
         const url = RPC_ENDPOINTS[rpc.idx];
@@ -271,14 +274,27 @@ async function checkNativeActivity(rpc, accountId) {
                     finality: 'final',
                     account_id: accountId
                 }
-            })
+            }),
+            signal: controller.signal
         });
+        clearTimeout(timeout);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
 
-        if (data.error || !data.result?.keys) {
-            log(`[${accountId}] Activity check failed: ${data.error?.message || 'no keys'}`, C.dim);
-            return 0;
+        if (data.error) {
+            // 'Unknown account' error is common if account deleted/doesn't exist
+            if (data.error.cause?.name === 'UNKNOWN_ACCOUNT') {
+                return 0n;
+            }
+            // For other errors, log but return 0 to assume "silence" so we warn
+            log(`[${accountId}] Activity check RPC error: ${data.error.message}`, C.dim);
+            return 0n;
+        }
+
+        if (!data.result?.keys) {
+            return 0n;
         }
 
         // Sum all nonces
@@ -288,7 +304,11 @@ async function checkNativeActivity(rpc, accountId) {
 
         return totalNonce;
     } catch (e) {
-        log(`[${accountId}] Activity check error: ${e.message}`, C.dim);
+        clearTimeout(timeout);
+        // Only log non-abort errors to avoid noise
+        if (e.name !== 'AbortError') {
+            log(`[${accountId}] Activity check failed: ${e.message}`, C.dim);
+        }
         return 0n;
     }
 }
@@ -1041,6 +1061,7 @@ This vault is now in EMERGENCY state.`;
 
         if (status.is_expired) {
             // Expired + no activity → trigger warning
+            log(`${prefix} 🚨 EXPIRED + SILENT (Nonce: ${currentNonce}). Triggering warning protocol...`, C.orange);
             await triggerWarningShot(rpc, accountId, status, prefix);
         } else {
             // In danger zone but not expired yet — just alert
@@ -1069,31 +1090,39 @@ This vault is now in EMERGENCY state.`;
 // ═══════════════════════════════════════════════════════════════════
 
 async function triggerWarningShot(rpc, accountId, status, prefix) {
-    try {
-        await callMethod(rpc, 'trigger_warning', { account_id: accountId });
-        log(`${prefix} Warning triggered on-chain`, C.yellow);
+    // Retry logic for critical warning trigger
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            log(`${prefix} Attempting trigger_warning (Try ${attempt}/3)...`, C.yellow);
 
-        // Send dust transaction to owner
-        await sendWarningShot(rpc, status.owner_id);
+            await callMethod(rpc, 'trigger_warning', { account_id: accountId });
+            log(`${prefix} Warning triggered on-chain`, C.yellow);
 
-        // Send Telegram notification
-        const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
-        const alertMessage = `🚨 *SENTINEL ALERT* 🚨
+            // Send dust transaction to owner
+            await sendWarningShot(rpc, status.owner_id);
 
+            // Send Telegram notification
+            const gracePeriodFormatted = formatTime(status.grace_period_ms || '86400000');
+            const alertMessage = `🚨 *SENTINEL ALERT* 🚨
+    
 ⚠️ *Protocol 'Warning Shot' INITIATED*
-
+    
 Your Vault Timer has *EXPIRED*.
 Vault: \`${accountId}\`
 Funds will be transferred to the beneficiary in *${gracePeriodFormatted}* unless you act.
-
+    
 👉 [PING NOW TO ABORT](https://keepalive-fdn.vercel.app/)`;
 
-        await sendTelegramAlert(accountId, alertMessage, status);
+            await sendTelegramAlert(accountId, alertMessage, status);
 
-        log(`${prefix} ${C.bold}🟡 WARNING SHOT FIRED${C.reset} — ${gracePeriodFormatted} grace period started`, C.yellow);
-    } catch (e) {
-        log(`${prefix} Warning trigger failed: ${e.message}`, C.red);
+            log(`${prefix} ${C.bold}🟡 WARNING SHOT FIRED${C.reset} — ${gracePeriodFormatted} grace period started`, C.yellow);
+            return; // Success, exit function
+        } catch (e) {
+            log(`${prefix} Warning trigger failed (Try ${attempt}/3): ${e.message}`, C.red);
+            if (attempt < 3) await sleep(2000); // Wait 2s before retry
+        }
     }
+    log(`${prefix} ❌ FAILED to trigger warning after 3 attempts.`, C.red);
 }
 
 // ═══════════════════════════════════════════════════════════════════
